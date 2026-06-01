@@ -1,327 +1,6 @@
-use soroban_sdk::{contractevent, contracttype, Address, BytesN, String, Vec};
+use soroban_sdk::{contractevent, Address, BytesN, u128};
+use raffle_shared::AdminOp;
 
-use crate::instance::{CancelReason, RaffleStatus, RandomnessSource};
-use crate::AdminOp;
-
-// ============================================================================
-// LIFECYCLE EVENTS
-// ============================================================================
-
-/// Emitted when a new raffle instance is initialized
-#[derive(Clone)]
-#[contractevent]
-pub struct RaffleCreated {
-    pub creator: Address,
-    pub end_time: u64,
-    pub max_tickets: u32,
-    pub ticket_price: i128,
-    pub payment_token: Address,
-    pub prize_amount: i128,
-    pub prizes: Vec<u32>,
-    pub description: String,
-    pub randomness_source: RandomnessSource,
-    /// SHA-256 hash of the off-chain metadata (description, image, rules) on IPFS.
-    #[topic]
-    pub metadata_hash: BytesN<32>,
-}
-
-/// Emitted when the creator deposits the prize pool
-#[derive(Clone)]
-#[contractevent]
-pub struct PrizeDeposited {
-    pub creator: Address,
-    pub amount: i128,
-    pub token: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when the creator reclaims the prize after cancellation or failure
-#[derive(Clone)]
-#[contractevent]
-pub struct PrizeRefunded {
-    pub creator: Address,
-    pub amount: i128,
-    pub token: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when a user purchases one or more tickets
-#[derive(Clone)]
-#[contractevent]
-pub struct TicketPurchased {
-    pub buyer: Address,
-    pub ticket_ids: Vec<u32>,
-    pub quantity: u32,
-    pub ticket_price: i128,
-    pub total_paid: i128,
-    pub timestamp: u64,
-}
-
-/// Emitted when the draw process is triggered
-#[derive(Clone)]
-#[contractevent]
-pub struct DrawTriggered {
-    pub triggered_by: Address,
-    pub total_tickets_sold: u32,
-    pub timestamp: u64,
-}
-
-/// Emitted when external randomness is requested from oracle
-#[derive(Clone)]
-#[contractevent]
-pub struct RandomnessRequested {
-    pub oracle: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when external randomness is received from oracle
-#[derive(Clone)]
-#[contractevent]
-pub struct RandomnessReceived {
-    pub oracle: Address,
-    pub seed: u64,
-    pub timestamp: u64,
-}
-
-/// Exact draw-quality label used for winner selection
-#[derive(Clone, PartialEq, Eq, Debug)]
-#[contracttype]
-pub enum RandomnessType {
-    Prng = 0,
-    Vrf = 1,
-    Fallback = 2,
-}
-
-/// Emitted when the raffle winner is determined
-#[derive(Clone)]
-#[contractevent]
-pub struct RaffleFinalized {
-    pub winners: Vec<Address>,
-    pub winning_ticket_ids: Vec<u32>,
-    pub total_tickets_sold: u32,
-    pub randomness_source: RandomnessSource,
-    pub randomness_type: RandomnessType,
-    pub finalized_at: u64,
-}
-
-/// Emitted for each draw determining a winner
-#[derive(Clone)]
-#[contractevent]
-pub struct WinnerDrawn {
-    pub winner: Address,
-    pub ticket_id: u32,
-    pub tier_index: u32,
-    pub timestamp: u64,
-}
-
-/// Emitted when a raffle is cancelled by the creator
-#[derive(Clone)]
-#[contractevent]
-pub struct RaffleCancelled {
-    pub creator: Address,
-    pub reason: CancelReason,
-    pub tickets_sold: u32,
-    pub prize_refunded: bool,
-    pub timestamp: u64,
-}
-
-/// Emitted when a ticket holder receives a refund
-#[derive(Clone)]
-#[contractevent]
-pub struct TicketRefunded {
-    pub buyer: Address,
-    pub ticket_number: u32,
-    pub amount: i128,
-    pub timestamp: u64,
-}
-
-/// Emitted when a creator's verification status is updated
-#[derive(Clone)]
-#[contractevent]
-pub struct CreatorVerified {
-    pub creator: Address,
-    pub is_verified: bool,
-    pub admin: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when a winner claims their prize
-#[derive(Clone)]
-#[contractevent]
-pub struct PrizeClaimed {
-    pub winner: Address,
-    pub tier_index: u32,
-    pub payment_token: Address,
-    pub gross_amount: i128,
-    pub net_amount: i128,
-    pub platform_fee: i128,
-    pub claimed_at: u64,
-}
-
-/// Emitted when platform fees are automatically swapped and burned
-#[derive(Clone)]
-#[contractevent]
-pub struct BuybackAndBurnExecuted {
-    pub router: Address,
-    pub payment_token: Address,
-    pub tikka_token: Address,
-    pub amount_in: i128,
-    pub amount_out: i128,
-    pub timestamp: u64,
-}
-
-// ============================================================================
-// ADMIN EVENTS
-// ============================================================================
-
-/// Emitted when the oracle timeout elapses and PRNG is used as fallback
-#[derive(Clone)]
-#[contractevent]
-pub struct RandomnessFallbackTriggered {
-    pub triggered_by: Address,
-    pub seed_used: u64,
-    pub request_ledger: u32,
-    pub fallback_ledger: u32,
-    pub timestamp: u64,
-}
-
-/// Emitted when the oracle address is updated
-#[derive(Clone)]
-#[contractevent]
-pub struct OracleAddressUpdated {
-    pub old_oracle: Option<Address>,
-    pub new_oracle: Address,
-    pub updated_by: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when the protocol fee is updated
-#[derive(Clone)]
-#[contractevent]
-pub struct FeeUpdated {
-    pub old_fee_bp: u32,
-    pub new_fee_bp: u32,
-    pub updated_by: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when the treasury address is updated
-#[derive(Clone)]
-#[contractevent]
-pub struct TreasuryUpdated {
-    pub old_treasury: Option<Address>,
-    pub new_treasury: Address,
-    pub updated_by: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when accumulated fees are withdrawn to the treasury
-#[derive(Clone)]
-#[contractevent]
-pub struct FeesWithdrawn {
-    pub recipient: Address,
-    pub amount: i128,
-    pub token: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when the contract is paused
-#[derive(Clone)]
-#[contractevent]
-pub struct ContractPaused {
-    pub paused_by: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when the contract is unpaused
-#[derive(Clone)]
-#[contractevent]
-pub struct ContractUnpaused {
-    pub unpaused_by: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when an admin transfer is proposed
-#[derive(Clone)]
-#[contractevent]
-pub struct AdminTransferProposed {
-    pub current_admin: Address,
-    pub proposed_admin: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when an admin transfer is accepted
-#[derive(Clone)]
-#[contractevent]
-pub struct AdminTransferAccepted {
-    pub old_admin: Address,
-    pub new_admin: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when a participant commits a hash during commit-reveal randomness
-#[derive(Clone)]
-#[contractevent]
-pub struct SeedCommitted {
-    pub participant: Address,
-    pub hash: soroban_sdk::BytesN<32>,
-    pub timestamp: u64,
-}
-
-/// Emitted when a participant reveals their secret during commit-reveal randomness
-#[derive(Clone)]
-#[contractevent]
-pub struct SeedRevealed {
-    pub participant: Address,
-    pub timestamp: u64,
-}
-
-/// Emitted when an old raffle's storage is wiped by the factory admin
-#[derive(Clone)]
-#[contractevent]
-pub struct RaffleCleanedUp {
-    pub raffle_address: Address,
-    pub cleaned_by: Address,
-    pub finish_time: u64,
-    pub cleaned_at: u64,
-}
-// TIME-LOCKED ADMIN OPERATION EVENTS
-// ============================================================================
-
-/// Emitted when an admin operation is proposed
-#[derive(Clone)]
-#[contractevent]
-pub struct AdminOpProposed {
-    pub op_id: u32,
-    pub op: AdminOp,
-    pub effective_timestamp: u64,
-    pub proposed_by: Address,
-}
-
-/// Emitted when an admin operation is executed
-#[derive(Clone)]
-#[contractevent]
-pub struct AdminOpExecuted {
-    pub op_id: u32,
-    pub op: AdminOp,
-    pub executed_by: Address,
-    pub executed_at: u64,
-}
-
-/// Emitted when an admin operation is cancelled
-#[derive(Clone)]
-#[contractevent]
-pub struct AdminOpCancelled {
-    pub op_id: u32,
-    pub cancelled_by: Address,
-    pub cancelled_at: u64,
-}
-
-// ============================================================================
-// FACTORY EVENTS
-// ============================================================================
-
-/// Emitted when the factory is initialized
 #[derive(Clone)]
 #[contractevent]
 pub struct FactoryInitialized {
@@ -331,48 +10,76 @@ pub struct FactoryInitialized {
     pub timestamp: u64,
 }
 
-/// Emitted when a new raffle instance is deployed by the factory
 #[derive(Clone)]
 #[contractevent]
-pub struct RaffleDeployed {
-    pub raffle_address: Address,
-    pub creator: Address,
+pub struct AdminOpProposed {
+    pub op_id: u32,
+    pub op: AdminOp,
+    pub effective_timestamp: u64,
+    pub proposed_by: Address,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct AdminOpExecuted {
+    pub op_id: u32,
+    pub op: AdminOp,
+    pub executed_by: Address,
+    pub executed_at: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct AdminOpCancelled {
+    pub op_id: u32,
+    pub cancelled_by: Address,
+    pub cancelled_at: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct ContractPaused {
+    pub paused_by: Address,
     pub timestamp: u64,
 }
 
-/// Emitted when the factory protocol fee or treasury is updated via set_config
 #[derive(Clone)]
 #[contractevent]
-pub struct FactoryConfigUpdated {
-    pub protocol_fee_bp: u32,
-    pub treasury: Address,
-    pub updated_by: Address,
+pub struct ContractUnpaused {
+    pub unpaused_by: Address,
     pub timestamp: u64,
 }
 
-// ============================================================================
-// INTERNAL STATE CHANGE EVENT
-// ============================================================================
-
-/// Emitted on every raffle status transition
 #[derive(Clone)]
 #[contractevent]
-pub struct RaffleStatusChanged {
-    pub old_status: RaffleStatus,
-    pub new_status: RaffleStatus,
+pub struct AdminTransferProposed {
+    pub current_admin: Address,
+    pub proposed_admin: Address,
     pub timestamp: u64,
 }
 
-// ============================================================================
-// CHECKPOINT EVENTS
-// ============================================================================
+#[derive(Clone)]
+#[contractevent]
+pub struct AdminTransferAccepted {
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub timestamp: u64,
+}
 
-/// Emitted when a periodic state checkpoint is created (every 1,000 raffles)
 #[derive(Clone)]
 #[contractevent]
 pub struct CheckpointCreated {
     pub index: u32,
     pub raffle_count: u32,
     pub ledger_timestamp: u64,
-    pub aggregate_hash: soroban_sdk::BytesN<32>,
+    pub aggregate_hash: BytesN<32>,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct RaffleCleanedUp {
+    pub raffle_address: Address,
+    pub cleaned_by: Address,
+    pub finish_time: u64,
+    pub cleaned_at: u64,
 }
