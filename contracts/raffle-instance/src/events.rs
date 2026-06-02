@@ -73,6 +73,7 @@ pub struct RandomnessReceived {
 #[derive(Clone)]
 #[contractevent]
 pub struct RaffleFinalized {
+    pub raffle_id: Address,
     pub winners: Vec<Address>,
     pub winning_ticket_ids: Vec<u32>,
     pub total_tickets_sold: u32,
