@@ -96,7 +96,7 @@ flowchart TD
     Creator -->|"deposit_prize()"| Token
     Token -->|"transfer(prize)"| Raffle
 
-    Buyer -->|"buy_ticket()"| Token
+    Buyer -->|"buy_tickets()"| Token
     Token -->|"transfer(ticket_price)"| Raffle
 
     Raffle -->|"finalize_raffle()"| Raffle
@@ -119,33 +119,43 @@ flowchart TD
 #### **`contracts/raffle-instance/src/lib.rs`**
 
 ```rust
-pub fn create_raffle(... ) -> u64;
-pub fn deposit_prize(... );
-pub fn buy_ticket(... ) -> u32;
-pub fn finalize_raffle(... ) -> Address;
-pub fn claim_prize(... );
-pub fn get_raffle(... ) -> Raffle;
-pub fn get_tickets(... ) -> Vec<Address>;
+pub fn create_raffle(... ) -> Result<(), Error>;
+pub fn deposit_prize(... ) -> Result<(), Error>;
+pub fn buy_tickets(... ) -> Result<u32, Error>;
+pub fn finalize_raffle(... ) -> Result<(), Error>;
+pub fn claim_prize(... ) -> Result<i128, Error>;
+pub fn get_raffle(... ) -> Result<Raffle, Error>;
+pub fn get_fairness_data(... ) -> Result<FairnessData, Error>;
 ```
 
 ### **Data Structures**
 
 ```rust
 pub struct Raffle {
-    pub id: u64,
     pub creator: Address,
     pub description: String,
     pub end_time: u64,
     pub max_tickets: u32,
+    pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
     pub payment_token: Address,
     pub prize_amount: i128,
+    pub prizes: Vec<u32>,
     pub tickets_sold: u32,
-    pub is_active: bool,
+    pub status: RaffleStatus,
     pub prize_deposited: bool,
-    pub prize_claimed: bool,
-    pub winner: Option<Address>,
+    pub winners: Vec<Address>,
+    pub claimed_winners: Vec<bool>,
+    pub randomness_source: RandomnessSource,
+    pub oracle_address: Option<Address>,
+    pub protocol_fee_bp: u32,
+    pub treasury_address: Option<Address>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
+    pub finalized_at: Option<u64>,
+    pub winner_ticket_id: Option<u32>,
+    pub claim_lockup_seconds: u64,
 }
 ```
 
