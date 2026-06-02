@@ -3,6 +3,9 @@
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, BytesN,
     Env, IntoVal, String, Symbol, Vec,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contracterror, contractimpl, token, xdr::ToXdr, Address, Bytes, BytesN,
+    Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 mod randomness;
@@ -20,7 +23,7 @@ use self::randomness::{
 use crate::events::{
     DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
     RaffleFinalized, RaffleStatusChanged, RandomnessReceived,
-    RandomnessRequested, TicketPurchased,
+    RandomnessRequested, TicketPurchased, TicketRefunded,
     WinnerDrawn, RandomnessFallbackTriggered,
     ContractPaused, ContractUnpaused,
 };
@@ -88,6 +91,7 @@ pub enum DataKey {
     RandomnessSeed,
     RandomnessRequested,
     RandomnessRequestLedger,
+    RandomnessRequestId,
     FinishTime,
     TotalTickets,
 }
@@ -125,6 +129,7 @@ pub enum Error {
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
+    MorePrizesThanTickets = 46,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -407,10 +412,26 @@ impl Contract {
         write_raffle(&env, &raffle);
 
         if let Some(factory_address) = env.storage().instance().get::<_, Address>(&DataKey::Factory) {
+            let contract_address = env.current_contract_address();
+            let record_volume_args: Vec<Val> =
+                (contract_address.clone(), raffle.payment_token.clone(), total_price)
+                    .into_val(&env);
+
+            env.authorize_as_current_contract(Vec::from_array(
+                &env,
+                [InvokerContractAuthEntry::Contract(SubContractInvocation {
+                    context: ContractContext {
+                        contract: factory_address.clone(),
+                        fn_name: Symbol::new(&env, "record_volume"),
+                        args: record_volume_args.clone(),
+                    },
+                    sub_invocations: Vec::new(&env),
+                })],
+            ));
             env.invoke_contract::<()>(
                 &factory_address,
                 &Symbol::new(&env, "record_volume"),
-                (raffle.payment_token.clone(), total_price).into_val(&env),
+                record_volume_args,
             );
             env.invoke_contract::<()>(
                 &factory_address,
@@ -477,11 +498,27 @@ impl Contract {
             if already {
                 return Err(Error::RandomnessAlreadyRequested);
             }
+            
+            // Generate unique request ID to prevent replay attacks
+            let request_id_seed = Bytes::from_array(&env, &(
+                env.ledger().timestamp(),
+                env.ledger().sequence(),
+                env.current_contract_address().to_xdr(&env),
+            ).to_xdr(&env));
+            let request_id_hash: BytesN<32> = env.crypto().sha256(&request_id_seed).into();
+            let mut id_bytes = [0u8; 8];
+            for i in 0..8 {
+                id_bytes[i] = request_id_hash.get(i as u32).unwrap();
+            }
+            let request_id = u64::from_be_bytes(id_bytes);
+            
             env.storage().instance().set(&DataKey::RandomnessRequested, &true);
             env.storage().instance().set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
+            env.storage().instance().set(&DataKey::RandomnessRequestId, &request_id);
 
             RandomnessRequested {
                 oracle: raffle.oracle_address.clone().unwrap_or(env.current_contract_address()),
+                request_id,
                 timestamp: now,
             }.publish(&env);
             return Ok(());
@@ -496,6 +533,7 @@ impl Contract {
         random_seed: u64,
         public_key: BytesN<32>,
         proof: BytesN<64>,
+        request_id: u64,
     ) -> Result<Address, Error> {
         let mut raffle = read_raffle(&env)?;
 
@@ -516,12 +554,19 @@ impl Contract {
             return Err(Error::NoRandomnessRequest);
         }
 
+        // Verify request ID to prevent replay attacks
+        let stored_request_id: u64 = env.storage().instance().get(&DataKey::RandomnessRequestId).ok_or(Error::NoRandomnessRequest)?;
+        if stored_request_id != request_id {
+            return Err(Error::InvalidParameters);
+        }
+
         let message = Bytes::from_array(&env, &random_seed.to_be_bytes());
         env.crypto().ed25519_verify(&public_key, &message, &proof);
 
         RandomnessReceived {
             oracle,
             seed: random_seed,
+            request_id,
             timestamp: env.ledger().timestamp(),
         }.publish(&env);
 
@@ -717,7 +762,7 @@ impl Contract {
         let token_client = token::Client::new(&env, &raffle.payment_token);
         token_client.transfer(&env.current_contract_address(), &ticket.owner, &raffle.ticket_price);
 
-        crate::events::TicketRefunded {
+        TicketRefunded {
             buyer: ticket.owner,
             ticket_number: ticket.ticket_number,
             amount: raffle.ticket_price,
@@ -818,6 +863,9 @@ fn do_finalize_with_seed(
     if total_tickets == 0 {
         return Err(Error::NoTicketsSold);
     }
+    if raffle.prizes.len() as u32 > total_tickets {
+        return Err(Error::MorePrizesThanTickets);
+    }
 
     // #256: Guard against all tickets being refunded after the draw window
     // opened but before finalize runs, which would make the winners Vec empty
@@ -867,6 +915,11 @@ fn do_finalize_with_seed(
     raffle.claimed_winners = claimed_winners;
     raffle.finalized_at = Some(env.ledger().timestamp());
     write_raffle(env, &raffle);
+
+    // Clear pending randomness state
+    env.storage().instance().remove(&DataKey::RandomnessRequested);
+    env.storage().instance().remove(&DataKey::RandomnessRequestId);
+    env.storage().instance().remove(&DataKey::RandomnessRequestLedger);
 
     RaffleFinalized {
         winners,
