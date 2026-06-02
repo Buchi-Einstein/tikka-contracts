@@ -118,6 +118,7 @@ pub enum Error {
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
+    InvalidTicketRange = 46,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -221,6 +222,9 @@ impl Contract {
         }
         if config.max_tickets == 0 || config.max_tickets > MAX_TICKETS_LIMIT {
             return Err(Error::InvalidParameters);
+        }
+        if config.max_tickets < config.min_tickets {
+            return Err(Error::InvalidTicketRange);
         }
 
         if config.ticket_price < MIN_TICKET_PRICE {
