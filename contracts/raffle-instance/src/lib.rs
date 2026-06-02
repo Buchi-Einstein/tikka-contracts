@@ -82,6 +82,7 @@ pub enum DataKey {
     RandomnessSeed,
     RandomnessRequested,
     RandomnessRequestLedger,
+    RandomnessRequestId,
     FinishTime,
     TotalTickets,
 }
@@ -118,6 +119,7 @@ pub enum Error {
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
+    InvalidRequestId = 46,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -458,11 +460,14 @@ impl Contract {
             if already {
                 return Err(Error::RandomnessAlreadyRequested);
             }
+            let request_id = build_internal_seed_u64(&env);
             env.storage().instance().set(&DataKey::RandomnessRequested, &true);
             env.storage().instance().set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
+            env.storage().instance().set(&DataKey::RandomnessRequestId, &request_id);
 
             RandomnessRequested {
                 oracle: raffle.oracle_address.clone().unwrap_or(env.current_contract_address()),
+                request_id,
                 timestamp: now,
             }.publish(&env);
             return Ok(());
@@ -474,6 +479,7 @@ impl Contract {
 
     pub fn provide_randomness(
         env: Env,
+        request_id: u64,
         random_seed: u64,
         public_key: BytesN<32>,
         proof: BytesN<64>,
@@ -495,6 +501,13 @@ impl Contract {
         let request_pending: bool = env.storage().instance().get(&DataKey::RandomnessRequested).unwrap_or(false);
         if !request_pending {
             return Err(Error::NoRandomnessRequest);
+        }
+
+        let stored_request_id: u64 = env.storage().instance()
+            .get(&DataKey::RandomnessRequestId)
+            .ok_or(Error::NoRandomnessRequest)?;
+        if request_id != stored_request_id {
+            return Err(Error::InvalidRequestId);
         }
 
         let message = Bytes::from_array(&env, &random_seed.to_be_bytes());

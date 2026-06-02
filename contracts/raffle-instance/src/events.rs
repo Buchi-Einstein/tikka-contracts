@@ -59,6 +59,7 @@ pub struct DrawTriggered {
 #[contractevent]
 pub struct RandomnessRequested {
     pub oracle: Address,
+    pub request_id: u64,
     pub timestamp: u64,
 }
 
