@@ -345,6 +345,10 @@ impl RaffleFactory {
         final_config.protocol_fee_bp = protocol_fee_bp;
         final_config.treasury_address = Some(treasury);
 
+        if final_config.metadata_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(ContractError::InvalidParameters);
+        }
+
         let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         let factory_address = env.current_contract_address();
 
