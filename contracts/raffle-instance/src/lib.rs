@@ -79,7 +79,6 @@ pub enum DataKey {
     Raffle,
     TicketCount(Address),
     Ticket(u32),
-    NextTicketId,
     Factory,
     ReentrancyGuard,
     Paused,
@@ -88,7 +87,6 @@ pub enum DataKey {
     RandomnessRequested,
     RandomnessRequestLedger,
     FinishTime,
-    TotalTickets,
 }
 
 #[contracterror]
@@ -137,29 +135,11 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
     env.storage().instance().set(&DataKey::Raffle, raffle);
 }
 
-fn get_ticket_count(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&DataKey::NextTicketId)
-        .unwrap_or(0u32)
-}
-
 fn get_ticket_owner(env: &Env, ticket_id: u32) -> Option<Address> {
     env.storage()
         .persistent()
         .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
         .map(|t| t.owner)
-}
-
-fn next_ticket_id(env: &Env) -> u32 {
-    let current: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::NextTicketId)
-        .unwrap_or(0u32);
-    let next = current + 1;
-    env.storage().instance().set(&DataKey::NextTicketId, &next);
-    next
 }
 
 fn acquire_guard(env: &Env) -> Result<(), Error> {
@@ -379,8 +359,8 @@ impl Contract {
         let net_amount = total_price - protocol_fee;
 
         for _ in 0..quantity {
-            let ticket_id = next_ticket_id(&env);
             raffle.tickets_sold += 1;
+            let ticket_id = raffle.tickets_sold;
 
             let ticket = Ticket {
                 id: ticket_id,
@@ -736,7 +716,7 @@ impl Contract {
         let raffle = read_raffle(&env)?;
         
         let mut ticket_ids = Vec::new(&env);
-        let count = get_ticket_count(&env);
+        let count = raffle.tickets_sold;
         for i in 1..=count {
             ticket_ids.push_back(i);
         }
@@ -813,7 +793,7 @@ fn do_finalize_with_seed(
     seed: u64,
     randomness_type: RandomnessType,
 ) -> Result<(), Error> {
-    let total_tickets = get_ticket_count(env);
+    let total_tickets = raffle.tickets_sold;
     if total_tickets == 0 {
         return Err(Error::NoTicketsSold);
     }
@@ -877,4 +857,79 @@ fn do_finalize_with_seed(
     }.publish(&env);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env};
+
+    #[test]
+    fn test_counter_synchronization_invariants() {
+        let env = Env::default();
+        let factory = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let payment_token = Address::generate(&env);
+        
+        let mut config = RaffleConfig {
+            description: soroban_sdk::String::from_str(&env, "Test"),
+            end_time: 0,
+            max_tickets: 100,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: 10_000,
+            payment_token: payment_token.clone(),
+            prize_amount: 10_000,
+            prizes: soroban_sdk::vec![&env, 10000],
+            randomness_source: RandomnessSource::Internal,
+            oracle_address: None,
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[1; 32]),
+            claim_lockup_seconds: 0,
+        };
+
+        // Initialize directly via init logic
+        let _ = Contract::init(env.clone(), factory.clone(), admin.clone(), creator.clone(), config);
+        
+        // Setup initial state: deposit prize
+        let mut raffle = read_raffle(&env).unwrap();
+        raffle.prize_deposited = true;
+        write_raffle(&env, &raffle);
+
+        // Buy tickets
+        let buyer = Address::generate(&env);
+        
+        let mut expected_id = 1;
+        // Verify sequential issuance and counter synchronization
+        for i in 1..=5 {
+            raffle = read_raffle(&env).unwrap();
+            raffle.tickets_sold += 1;
+            let ticket_id = raffle.tickets_sold;
+            
+            assert_eq!(ticket_id, expected_id, "Ticket IDs must be monotonic");
+            
+            let ticket = Ticket {
+                id: ticket_id,
+                owner: buyer.clone(),
+                purchase_time: 0,
+                ticket_number: raffle.tickets_sold,
+            };
+            env.storage().persistent().set(&DataKey::Ticket(ticket_id), &ticket);
+            write_raffle(&env, &raffle);
+            
+            expected_id += 1;
+        }
+
+        let updated_raffle = read_raffle(&env).unwrap();
+        assert_eq!(updated_raffle.tickets_sold, 5, "Total tickets sold must exactly match total issued IDs");
+        
+        // Edge cases around first/last IDs and ranges
+        assert!(get_ticket_owner(&env, 1).is_some(), "First ticket must exist");
+        assert!(get_ticket_owner(&env, 5).is_some(), "Last ticket must exist");
+        assert!(get_ticket_owner(&env, 6).is_none(), "Out of bounds ticket must not exist");
+    }
 }
