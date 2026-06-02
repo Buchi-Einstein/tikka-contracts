@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
+use soroban_sdk::{contracttype, 
     contract, contracterror, contractimpl, token, xdr::ToXdr, Address, Bytes, BytesN,
     Env, IntoVal, String, Symbol, Vec,
 };
@@ -18,7 +18,7 @@ use self::randomness::{
 };
 
 use crate::events::{
-    DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
+    PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
     RaffleFinalized, RaffleStatusChanged, RandomnessReceived,
     RandomnessRequested, TicketPurchased,
     WinnerDrawn, RandomnessFallbackTriggered,
@@ -34,7 +34,7 @@ pub const MIN_TICKET_PRICE: i128 = 10_000;
 pub struct Contract;
 
 #[derive(Clone)]
-pub struct Raffle {
+#[contracttype] pub struct Raffle {
     pub creator: Address,
     pub description: String,
     pub end_time: u64,
@@ -61,7 +61,7 @@ pub struct Raffle {
 }
 
 #[derive(Clone)]
-pub struct FairnessMetadata {
+#[contracttype] pub struct FairnessMetadata {
     pub seed: u64,
     pub randomness_source: RandomnessSource,
     pub winning_ticket_indices: Vec<u32>,
@@ -303,7 +303,7 @@ impl Contract {
             return Err(Error::PrizeAlreadyDeposited);
         }
 
-        let old_status = raffle.status.clone();
+        let _old_status = raffle.status.clone();
         raffle.prize_deposited = true;
         write_raffle(&env, &raffle);
 
@@ -358,7 +358,7 @@ impl Contract {
         let protocol_fee = total_price
             .checked_mul(raffle.protocol_fee_bp as i128)
             .ok_or(Error::ArithmeticOverflow)? / 10000;
-        let net_amount = total_price - protocol_fee;
+        let _net_amount = total_price - protocol_fee;
 
         for _ in 0..quantity {
             let ticket_id = next_ticket_id(&env);
@@ -478,7 +478,7 @@ impl Contract {
         public_key: BytesN<32>,
         proof: BytesN<64>,
     ) -> Result<Address, Error> {
-        let mut raffle = read_raffle(&env)?;
+        let raffle = read_raffle(&env)?;
 
         let oracle = match &raffle.oracle_address {
             Some(addr) => {
@@ -555,7 +555,7 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        if tier_index as usize >= raffle.winners.len() {
+        if tier_index >= raffle.winners.len() {
             return Err(Error::InvalidParameters);
         }
 
@@ -624,7 +624,7 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        let old_status = raffle.status.clone();
+        let _old_status = raffle.status.clone();
         raffle.status = RaffleStatus::Cancelled;
         write_raffle(&env, &raffle);
 
@@ -706,7 +706,7 @@ impl Contract {
 
     pub fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
         let metadata: FairnessMetadata = env.storage().instance().get(&DataKey::RandomnessSeed).ok_or(Error::InvalidStatus)?;
-        let raffle = read_raffle(&env)?;
+        let _raffle = read_raffle(&env)?;
         
         let mut ticket_ids = Vec::new(&env);
         let count = get_ticket_count(&env);
