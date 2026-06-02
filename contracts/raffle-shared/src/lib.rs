@@ -106,6 +106,8 @@ pub struct PageResultTickets {
 #[contracttype]
 pub enum AdminOp {
     SetConfig(u32, Address),
+    /// Governance-gated update of the WASM hash used for new raffle instance deployments.
+    UpdateWasmHash(BytesN<32>),
 }
 
 pub const DEFAULT_PAGE_LIMIT: u32 = 100;
