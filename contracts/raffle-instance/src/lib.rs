@@ -584,6 +584,11 @@ impl Contract {
         }
         if all_claimed {
             raffle.status = RaffleStatus::Claimed;
+            RaffleStatusChanged {
+                old_status: RaffleStatus::Finalized,
+                new_status: RaffleStatus::Claimed,
+                timestamp: env.ledger().timestamp(),
+            }.publish(&env);
         }
         write_raffle(&env, &raffle);
 
