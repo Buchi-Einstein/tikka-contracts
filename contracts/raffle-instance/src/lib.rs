@@ -333,7 +333,7 @@ impl Contract {
             prize_amount: config.prize_amount,
             prizes: config.prizes.clone(),
             tickets_sold: 0,
-            status: RaffleStatus::Active,
+            status: RaffleStatus::PendingPrize,
             prize_deposited: false,
             winners: Vec::new(&env),
             claimed_winners: Vec::new(&env),
@@ -378,21 +378,38 @@ impl Contract {
         }
 
         let old_status = raffle.status.clone();
-        raffle.prize_deposited = true;
-        write_raffle(&env, &raffle);
 
+        // Move tokens first. If the transfer fails we want the contract state
+        // (prize_deposited flag, raffle.status) to remain untouched.
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
-
         token_client
             .try_transfer(&raffle.creator, &contract_address, &raffle.prize_amount)
             .map_err(|_| Error::TokenTransferFailed)?;
+
+        // Transfer succeeded — flip the prize_deposited flag and transition the
+        // raffle into Active so ticket sales can begin. This is the explicit
+        // status transition #225 asks for: previously the raffle was created
+        // directly in Active and `deposit_prize` only flipped a boolean, which
+        // left off-chain indexers without a clear signal that the raffle had
+        // become buyable.
+        raffle.prize_deposited = true;
+        raffle.status = RaffleStatus::Active;
+        write_raffle(&env, &raffle);
+
+        let timestamp = env.ledger().timestamp();
 
         PrizeDeposited {
             creator: raffle.creator.clone(),
             amount: raffle.prize_amount,
             token: raffle.payment_token.clone(),
-            timestamp: env.ledger().timestamp(),
+            timestamp,
+        }.publish(&env);
+
+        RaffleStatusChanged {
+            old_status,
+            new_status: RaffleStatus::Active,
+            timestamp,
         }.publish(&env);
 
         Ok(())
