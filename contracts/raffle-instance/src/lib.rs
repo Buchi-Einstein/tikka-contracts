@@ -20,18 +20,23 @@ use raffle_shared::{
 use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
 
 use crate::events::{
-    ContractPaused, ContractUnpaused, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled,
-    RaffleCreated, RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered,
-    RandomnessReceived, RandomnessRequested, TicketPurchased, TicketRefunded, WinnerDrawn,
+    ContractPaused, ContractUnpaused, EmergencyWithdrawn, FeesWithdrawn, PrizeClaimed,
+    PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated, RaffleFinalized,
+    RaffleStatusChanged, RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested,
+    TicketPurchased, TicketRefunded, WinnerDrawn,
 };
 
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
 pub const MAX_DESCRIPTION_LENGTH: u32 = 1000;
 pub const MAX_TICKETS_LIMIT: u32 = 100_000;
+pub const MAX_PRIZES: u32 = 100;
 pub const MIN_TICKET_PRICE: i128 = 10_000;
+pub const MAX_PRIZE_AMOUNT: i128 = 1_000_000_000_000_000_000_000; // 1e21
 /// Default and bounds for the claim lockup delay (#259).
 pub const DEFAULT_CLAIM_LOCKUP_SECONDS: u64 = 3_600;
 pub const MAX_CLAIM_LOCKUP_SECONDS: u64 = 604_800; // 7 days
+/// Emergency withdraw delay (seconds). Set to 90 days.
+pub const EMERGENCY_WITHDRAW_DELAY_SECONDS: u64 = 90 * 24 * 3600; // 7776000
 
 #[contract]
 pub struct Contract;
@@ -81,7 +86,6 @@ pub enum DataKey {
     TicketCount(Address),
     Ticket(u32),
     TicketRefunded(u32),
-    NextTicketId,
     Factory,
     ReentrancyGuard,
     Paused,
@@ -91,7 +95,6 @@ pub enum DataKey {
     RandomnessRequestLedger,
     RandomnessRequestId,
     FinishTime,
-    TotalTickets,
     AccumulatedFees,
 }
 
@@ -133,6 +136,10 @@ pub enum Error {
     SlippageExceeded = 48,
     InvalidIndex = 49,
     MorePrizesThanTickets = 50,
+    ZeroPrize = 51,
+    InvalidTokenAddress = 52,
+    TooManyPrizes = 53,
+    EmergencyTooEarly = 54,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -146,31 +153,11 @@ fn write_raffle(env: &Env, raffle: &Raffle) {
     env.storage().instance().set(&DataKey::Raffle, raffle);
 }
 
-fn get_ticket_count(env: &Env) -> u32 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::NextTicketId)
-        .unwrap_or(0u32)
-}
-
 fn get_ticket_owner(env: &Env, ticket_id: u32) -> Option<Address> {
     env.storage()
         .persistent()
         .get::<_, Ticket>(&DataKey::Ticket(ticket_id))
         .map(|t| t.owner)
-}
-
-fn next_ticket_id(env: &Env) -> u32 {
-    let current: u32 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::NextTicketId)
-        .unwrap_or(0u32);
-    let next = current + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::NextTicketId, &next);
-    next
 }
 
 fn acquire_guard(env: &Env) -> Result<(), Error> {
@@ -232,6 +219,14 @@ fn require_not_paused(env: &Env) -> Result<(), Error> {
     {
         return Err(Error::ContractPaused);
     }
+    Ok(())
+}
+
+fn validate_token_address(env: &Env, token_address: &Address) -> Result<(), Error> {
+    let token_client = token::Client::new(env, token_address);
+    token_client
+        .try_decimals()
+        .map_err(|_| Error::InvalidTokenAddress)?;
     Ok(())
 }
 
@@ -317,8 +312,14 @@ impl Contract {
         if config.prize_amount < config.ticket_price {
             return Err(Error::InvalidParameters);
         }
+        if config.prize_amount > MAX_PRIZE_AMOUNT {
+            return Err(Error::InvalidParameters);
+        }
         if config.prizes.is_empty() {
             return Err(Error::InvalidParameters);
+        }
+        if config.prizes.len() > MAX_PRIZES {
+            return Err(Error::TooManyPrizes);
         }
         let mut total_prizes_bp = 0u32;
         for prize_bp in config.prizes.iter() {
@@ -350,6 +351,9 @@ impl Contract {
         if config.metadata_hash == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(Error::InvalidParameters);
         }
+
+        // Validate that the payment_token is a valid token contract
+        validate_token_address(&env, &config.payment_token)?;
 
         // #259: claim_lockup_seconds must be within [0, MAX_CLAIM_LOCKUP_SECONDS].
         // Zero is interpreted as "use the default".
@@ -503,20 +507,9 @@ impl Contract {
             / 10000;
         let _net_amount = total_price - protocol_fee;
 
-        // Read the counter once, assign IDs as a contiguous range, write counter once.
-        let first_ticket_id: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::NextTicketId)
-            .unwrap_or(0u32);
-        let last_ticket_id = first_ticket_id + quantity; // IDs will be first+1 .. first+quantity
-        env.storage()
-            .instance()
-            .set(&DataKey::NextTicketId, &last_ticket_id);
-
-        for i in 0..quantity {
-            let ticket_id = first_ticket_id + i + 1;
+        for _ in 0..quantity {
             raffle.tickets_sold += 1;
+            let ticket_id = raffle.tickets_sold;
 
             let ticket = Ticket {
                 id: ticket_id,
@@ -870,6 +863,7 @@ impl Contract {
 
         let fee = amount * (raffle.protocol_fee_bp as i128) / 10000;
         let net_amount = amount - fee;
+        require!(net_amount > 0, Error::ZeroPrize);
 
         raffle.claimed_winners.set(tier_index, true);
 
@@ -924,6 +918,36 @@ impl Contract {
         .publish(&env);
 
         Ok(net_amount)
+    }
+
+    pub fn withdraw_fees(
+        env: Env,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotAuthorized)?;
+        admin.require_auth();
+
+        let raffle = read_raffle(&env)?;
+        if raffle.status != RaffleStatus::Finalized {
+            return Err(Error::InvalidStatus);
+        }
+
+        if amount <= 0 {
+            return Err(Error::InvalidParameters);
+        }
+
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        token_client.transfer(&env.current_contract_address(), &recipient, &amount);
+
+        FeesWithdrawn {
+            recipient,
+            amount,
+            token: raffle.payment_token.clone(),
+            timestamp: env.ledger().timestamp(),
+        }.publish(&env);
+
+        Ok(())
     }
 
     pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
@@ -998,6 +1022,59 @@ impl Contract {
         Ok(())
     }
 
+    pub fn emergency_withdraw(env: Env, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+        let mut raffle = read_raffle(&env)?;
+
+        if !raffle.prize_deposited {
+            return Err(Error::PrizeNotDeposited);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotAuthorized)?;
+        if caller != raffle.creator && caller != admin {
+            return Err(Error::NotAuthorized);
+        }
+
+        let now = env.ledger().timestamp();
+
+        // Allow emergency withdraw only after a long timeout.
+        match raffle.status {
+            RaffleStatus::Finalized => {
+                if let Some(finalized_at) = raffle.finalized_at {
+                    if now < finalized_at + EMERGENCY_WITHDRAW_DELAY_SECONDS {
+                        return Err(Error::EmergencyTooEarly);
+                    }
+                } else {
+                    return Err(Error::EmergencyTooEarly);
+                }
+            }
+            RaffleStatus::Drawing => {
+                if raffle.end_time == 0 || now < raffle.end_time + EMERGENCY_WITHDRAW_DELAY_SECONDS {
+                    return Err(Error::EmergencyTooEarly);
+                }
+            }
+            _ => return Err(Error::InvalidStatus),
+        }
+
+        // Mark prize as withdrawn and transfer back to creator
+        raffle.prize_deposited = false;
+        raffle.status = RaffleStatus::Cancelled;
+        write_raffle(&env, &raffle);
+
+        let token_client = token::Client::new(&env, &raffle.payment_token);
+        token_client.transfer(&env.current_contract_address(), &raffle.creator, &raffle.prize_amount);
+
+        EmergencyWithdrawn {
+            withdrawn_by: caller,
+            to: raffle.creator.clone(),
+            amount: raffle.prize_amount,
+            token: raffle.payment_token.clone(),
+            timestamp: env.ledger().timestamp(),
+        }.publish(&env);
+
+        Ok(())
+    }
+
     pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
         acquire_guard(&env)?;
         let raffle = read_raffle(&env)?;
@@ -1053,8 +1130,9 @@ impl Contract {
             .instance()
             .get(&DataKey::RandomnessSeed)
             .ok_or(Error::InvalidStatus)?;
+        let raffle = read_raffle(&env)?;
         let mut ticket_ids = Vec::new(&env);
-        let count = get_ticket_count(&env);
+        let count = raffle.tickets_sold;
         for i in 1..=count {
             ticket_ids.push_back(i);
         }
@@ -1201,7 +1279,7 @@ fn do_finalize_with_seed(
     seed: u64,
     randomness_type: RandomnessType,
 ) -> Result<(), Error> {
-    let total_tickets = get_ticket_count(env);
+    let total_tickets = raffle.tickets_sold;
     if total_tickets == 0 {
         return Err(Error::NoTicketsSold);
     }
