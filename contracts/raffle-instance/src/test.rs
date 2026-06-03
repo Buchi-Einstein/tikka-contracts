@@ -7,13 +7,26 @@ use soroban_sdk::{
     Address, BytesN, Env,
 };
 
+mod mock_factory {
+    use soroban_sdk::{contractimpl, Address, Env};
+
+    pub struct MockFactory;
+
+    #[contractimpl]
+    impl MockFactory {
+        pub fn record_volume(_env: Env, _contract: Address, _token: Address, _amount: i128) {}
+        pub fn track_participant(_env: Env, _participant: Address) {}
+    }
+}
+
 #[test]
 fn test_oracle_fallback_with_ledger_delays() {
     let env = Env::default();
     env.mock_all_auths();
 
     // 1. Setup factory, admin, creator
-    let factory = Address::generate(&env);
+    let factory_id = env.register_contract(None, mock_factory::MockFactory);
+    let factory = factory_id.address();
     let admin = Address::generate(&env);
     let creator = Address::generate(&env);
     let oracle = Address::generate(&env);
