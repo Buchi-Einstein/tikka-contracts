@@ -1102,6 +1102,7 @@ impl Contract {
         // #258: status check BEFORE require_auth to prevent double-spend on
         // status transitions that occur between auth and the gate.
         if raffle.status != RaffleStatus::Cancelled && raffle.status != RaffleStatus::Failed {
+            release_guard(&env);
             return Err(Error::InvalidStatus);
         }
 
