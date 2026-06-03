@@ -5,6 +5,9 @@ use soroban_sdk::{
     IntoVal, Symbol, Vec,
 };
 
+#[cfg(test)]
+use soroban_sdk::testutils::Address as _;
+
 mod events;
 
 use raffle_shared::{
@@ -762,7 +765,7 @@ impl RaffleFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events, Ledger};
+    use soroban_sdk::testutils::Address as _;
 
     fn setup_factory(env: &Env) -> (RaffleFactoryClient<'_>, Address, Address) {
         let admin = Address::generate(env);
@@ -780,7 +783,7 @@ mod tests {
     #[test]
     fn test_init_factory() {
         let env = Env::default();
-        let (client, admin, treasury) = setup_factory(&env);
+        let (client, admin, _treasury) = setup_factory(&env);
         assert_eq!(client.get_admin(), admin);
     }
 }
