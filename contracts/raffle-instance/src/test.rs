@@ -18,7 +18,8 @@ fn test_oracle_fallback_with_ledger_delays() {
     let oracle = Address::generate(&env);
     let payment_token = Address::generate(&env);
 
-    let contract_id = env.register(None, Contract);
+    #[allow(deprecated)]
+    let contract_id = env.register_contract(None, Contract);
     let client = ContractClient::new(&env, &contract_id);
 
     // 2. Initialize Raffle with External Randomness
