@@ -616,6 +616,7 @@ impl Contract {
         }
 
         TicketPurchased {
+            raffle: env.current_contract_address(), // <--- Add this line here
             buyer,
             ticket_ids,
             quantity,
