@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "contracts/*",
 ]
+default-members = ["contracts/*"]
 
 [workspace.dependencies]
 soroban-sdk = "23"
