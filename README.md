@@ -143,13 +143,14 @@ pub fn get_raffle(... ) -> Result<Raffle, Error>;
 ```rust
 pub struct Raffle {
     pub creator: Address,
+    pub payment_token: Address,
+    pub treasury_address: Option<Address>,
     pub description: String,
     pub end_time: u64,
     pub max_tickets: u32,
     pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
-    pub payment_token: Address,
     pub prize_amount: i128,
     pub prizes: Vec<u32>,
     pub tickets_sold: u32,

@@ -63,24 +63,30 @@ pub struct Contract;
 #[derive(Clone)]
 #[contracttype]
 pub struct Raffle {
+    // Addresses grouped together
     pub creator: Address,
+    pub payment_token: Address,
+    pub treasury_address: Option<Address>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
+    pub oracle_address: Option<Address>,
+
+    // Variable-length collections and text
     pub description: String,
+    pub prizes: Vec<u32>,
+    pub winners: Vec<Address>,
+    pub claimed_winners: Vec<bool>,
+
+    // Large numeric fields adjacent
+    pub ticket_price: i128,
+    pub prize_amount: i128,
+
+    // Time fields
     pub end_time: u64,
     pub no_deadline: bool,
     pub max_tickets: u32,
     pub min_tickets: u32,
-    pub allow_multiple: bool,
-    pub ticket_price: i128,
-    pub payment_token: Address,
-    pub prize_amount: i128,
-    pub prizes: Vec<u32>,
     pub tickets_sold: u32,
-    pub status: RaffleStatus,
-    pub prize_deposited: bool,
-    pub winners: Vec<Address>,
-    pub claimed_winners: Vec<bool>,
-    pub randomness_source: RandomnessSource,
-    pub oracle_address: Option<Address>,
     pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
     pub swap_router: Option<Address>,
