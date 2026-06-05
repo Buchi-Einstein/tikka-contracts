@@ -144,9 +144,26 @@ impl WinnerSelectionStrategy for PrngWinnerSelection {
         env.prng().seed(self.seed_bytes(env));
 
         for _ in 0..winner_count {
-            #[allow(deprecated)]
-            let idx = env.prng().u64_in_range(0..(total_tickets as u64)) as u32;
-            indices.push_back(idx);
+            // Keep sampling until we find an index that hasn't been selected yet
+            loop {
+                #[allow(deprecated)]
+                let idx = env.prng().u64_in_range(0..(total_tickets as u64)) as u32;
+                
+                // Check if this index is already in the selected indices
+                let mut found = false;
+                for i in 0..indices.len() {
+                    if indices.get(i).unwrap() == idx {
+                        found = true;
+                        break;
+                    }
+                }
+                
+                // If not found, add it and break; otherwise resample
+                if !found {
+                    indices.push_back(idx);
+                    break;
+                }
+            }
         }
 
         indices
