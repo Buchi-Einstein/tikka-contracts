@@ -3,6 +3,19 @@ use raffle_shared::AdminOp;
 use soroban_sdk::{contractevent, Address, BytesN};
 
 
+/// Emitted after every successful raffle instance deployment.
+/// Records the exact WASM hash used so any deviation from InstanceWasmHash
+/// is immediately visible on-chain — fulfils the auditability requirement
+/// from issue #246.
+#[derive(Clone)]
+#[contractevent]
+pub struct RaffleInstanceDeployed {
+    pub instance: Address,
+    pub wasm_hash: BytesN<32>,
+    pub creator: Address,
+    pub timestamp: u64,
+}
+
 #[derive(Clone)]
 #[contractevent]
 pub struct FactoryInitialized {

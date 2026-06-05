@@ -277,6 +277,11 @@ impl RaffleFactory {
                     timestamp: env.ledger().timestamp(),
                 }.publish(&env);
             }
+            AdminOp::UpdateWasmHash(new_hash) => {
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::InstanceWasmHash, &new_hash);
+            }
         }
 
         env.storage()
@@ -324,6 +329,53 @@ impl RaffleFactory {
             .persistent()
             .get(&DataKey::OpCounter)
             .unwrap_or(0u32)
+    }
+
+    /// Return the WASM hash currently stored for new raffle instance deployments.
+    /// Access: Anyone (read-only transparency function for issue #246)
+    pub fn get_instance_wasm_hash(env: Env) -> BytesN<32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InstanceWasmHash)
+            .unwrap()
+    }
+
+    /// Propose a governance-gated update to InstanceWasmHash.
+    /// Subject to the 48-hour timelock like all other admin operations.
+    /// Access: Admin only
+    pub fn propose_wasm_hash_update(
+        env: Env,
+        new_hash: BytesN<32>,
+    ) -> Result<u32, ContractError> {
+        let admin = require_admin(&env)?;
+        let op_id = env
+            .storage()
+            .persistent()
+            .get::<_, u32>(&DataKey::OpCounter)
+            .unwrap_or(0)
+            .saturating_add(1);
+
+        env.storage().persistent().set(&DataKey::OpCounter, &op_id);
+
+        let effective_timestamp = env.ledger().timestamp() + TIMELOCK_DELAY_SECONDS;
+        let op = AdminOp::UpdateWasmHash(new_hash);
+        let pending = PendingOp {
+            op: op.clone(),
+            effective_timestamp,
+            proposed_by: admin.clone(),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingOp(op_id), &pending);
+
+        events::AdminOpProposed {
+            op_id,
+            op,
+            effective_timestamp,
+            proposed_by: admin,
+        }.publish(&env);
+
+        Ok(op_id)
     }
 
     pub fn create_raffle(
@@ -437,8 +489,29 @@ impl RaffleFactory {
         env.invoke_contract::<()>(
             &raffle_address,
             &Symbol::new(&env, "init"),
-            (factory_address, admin, creator, final_config).into_val(&env),
+            (factory_address, admin, creator.clone(), final_config).into_val(&env),
         );
+
+        // Issue #246: Re-read InstanceWasmHash after the init() cross-contract call to
+        // guard against a reentrant init() that swaps InstanceWasmHash to a malicious
+        // value mid-deployment.  The Soroban protocol already enforces that deploy_v2
+        // uses exactly the hash we passed, so this is a defence-in-depth reentrancy
+        // guard rather than a network-level check.
+        let post_deploy_hash: BytesN<32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InstanceWasmHash)
+            .unwrap();
+        if post_deploy_hash != wasm_hash {
+            return Err(ContractError::WasmHashMismatch);
+        }
+
+        events::RaffleInstanceDeployed {
+            instance: raffle_address.clone(),
+            wasm_hash,
+            creator,
+            timestamp: env.ledger().timestamp(),
+        }.publish(&env);
 
         instances.push_back(raffle_address.clone());
         env.storage()
