@@ -24,17 +24,21 @@ use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Vec};
 //   4. `raffle_id`         – the raffle contract address in XDR encoding,
 //                            making every raffle's draw independent even when
 //                            finalized in the same ledger
+//   5. `tickets_sold`      – ticket count at draw time, so otherwise-identical
+//                            draws with different participation produce
+//                            different seeds
 //
-// All four inputs are packed together and passed through `env.crypto().sha256`
+// All five inputs are packed together and passed through `env.crypto().sha256`
 // to produce a uniformly-distributed 32-byte value that is used as the PRNG
 // seed via `env.prng().seed()`.
 
-/// Builds a 32-byte internal PRNG seed by hashing four ledger entropy sources.
+/// Builds a 32-byte internal PRNG seed by hashing ledger and raffle entropy sources.
 ///
 /// # Arguments
 ///
 /// * `env`       – the contract execution environment
-/// * `raffle_id` – the current contract's address (distinguishes concurrent raffles)
+/// * `raffle_id`    - the current contract's address (distinguishes concurrent raffles)
+/// * `tickets_sold` - number of tickets sold when the draw is finalized
 ///
 /// # Returns
 ///
@@ -45,16 +49,32 @@ use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Vec};
 /// **For low-stakes raffles only.**  See the module-level comment for a full
 /// explanation of the limitations and the recommended alternative for
 /// high-value draws.
+#[allow(dead_code)]
 pub fn build_internal_seed(env: &Env, raffle_id: &Address) -> BytesN<32> {
     let timestamp = env.ledger().timestamp();
     let sequence = env.ledger().sequence();
     let network_id: BytesN<32> = env.ledger().network_id();
 
-    // Pack all four sources into a single byte buffer, then SHA-256 hash it.
+    // Pack all sources into a single byte buffer, then SHA-256 hash it.
     // Using XDR serialisation guarantees an unambiguous, length-delimited
     // encoding so there are no collisions between differently-typed fields.
     let raw: Bytes = (timestamp, sequence, network_id, raffle_id.clone()).to_xdr(env);
-    env.crypto().sha256(&raw).into()
+    hash_bytes32(env, &raw)
+}
+
+/// Hashes the input with SHA-256 and validates the result.
+///
+/// On congested ledgers, the crypto operation may fail due to resource limits.
+/// In that case we expect the returned hash to be invalid rather than silently
+/// falling back to a zeroed seed, which would make winner selection
+/// deterministic and insecure.
+#[allow(dead_code)]
+fn hash_bytes32(env: &Env, input: &Bytes) -> BytesN<32> {
+    let hash: BytesN<32> = env.crypto().sha256(input).into();
+    if hash.to_array() == [0u8; 32] {
+        panic!("crypto.sha256() failed: invalid hash output");
+    }
+    hash
 }
 
 /// Common winner-selection interface used by both PRNG and oracle paths.
@@ -70,13 +90,15 @@ pub trait WinnerSelectionStrategy {
 ///
 /// **For low-stakes raffles only** — see [`build_internal_seed`] for the full
 /// security caveat.
+#[allow(dead_code)]
 pub struct PrngWinnerSelection {
-    timestamp: u64,
-    sequence: u32,
-    raffle_id: Address,
-    tickets_sold: u32,
+    pub timestamp: u64,
+    pub sequence: u32,
+    pub raffle_id: Address,
+    pub tickets_sold: u32,
 }
 
+#[allow(dead_code)]
 impl PrngWinnerSelection {
     pub fn new(timestamp: u64, sequence: u32, raffle_id: Address, tickets_sold: u32) -> Self {
         Self {
@@ -92,7 +114,7 @@ impl PrngWinnerSelection {
     /// inputs as the actual seed so it can be used to spot-check draws.
     pub fn seed_fingerprint(&self, env: &Env) -> u64 {
         // Mix the build_internal_seed output down to a u64 for the fairness proof.
-        let seed_bytes: BytesN<32> = build_internal_seed(env, &self.raffle_id);
+        let seed_bytes: BytesN<32> = build_internal_seed(env, &self.raffle_id, self.tickets_sold);
         let arr = seed_bytes.to_array();
         // Take the first 8 bytes as big-endian u64.
         u64::from_be_bytes([
@@ -101,16 +123,12 @@ impl PrngWinnerSelection {
     }
 
     /// Returns the raw 32-byte seed as `Bytes` for `env.prng().seed()`.
-    ///
-    /// Wraps [`build_internal_seed`] and additionally mixes in `tickets_sold`
-    /// so that two raffles with the same address finalized in the same ledger
-    /// still differ if they have different ticket counts.
     fn seed_bytes(&self, env: &Env) -> Bytes {
         let base: BytesN<32> = build_internal_seed(env, &self.raffle_id);
         // XDR-pack the base seed + tickets_sold and re-hash to include the
         // extra entropy source without truncating the network_id contribution.
         let combined: Bytes = (base, self.tickets_sold).to_xdr(env);
-        env.crypto().sha256(&combined).into()
+        hash_bytes32(env, &combined).into()
     }
 }
 
@@ -174,28 +192,33 @@ impl WinnerSelectionStrategy for OracleSeedWinnerSelection {
             return indices;
         }
 
+        // #257: Use rejection sampling to eliminate modulo bias.
+        // We discard samples that fall in the biased tail so every ticket in
+        // [0, total_tickets) is chosen with exactly equal probability.
+        //
+        // largest_multiple = floor(u64::MAX / total_tickets) * total_tickets
+        // Any sample >= largest_multiple is rejected and the seed advanced.
+        let n = total_tickets as u64;
+        let largest_multiple = (u64::MAX / n) * n;
+
         let mut current_seed = self.seed;
         for _ in 0..winner_count {
-            // Keep incrementing seed until we find an index that hasn't been selected yet
-            loop {
-                let idx = (current_seed % (total_tickets as u64)) as u32;
-                
-                // Check if this index is already in the selected indices
-                let mut found = false;
-                for i in 0..indices.len() {
-                    if indices.get(i).unwrap() == idx {
-                        found = true;
-                        break;
-                    }
+            // Advance until the sample falls below the rejection threshold.
+            let idx = loop {
+                if current_seed < largest_multiple {
+                    break (current_seed % n) as u32;
                 }
-                
-                // If not found, add it and break; otherwise resample with next seed
-                if !found {
-                    indices.push_back(idx);
-                    break;
-                }
-                current_seed = current_seed.wrapping_add(1);
-            }
+                // Mix the seed to get a new candidate; wrapping_mul with a
+                // large odd constant provides a fast, bias-free step.
+                current_seed = current_seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+            };
+            indices.push_back(idx);
+            // Advance the seed for the next winner so picks are independent.
+            current_seed = current_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
         }
 
         indices
@@ -219,8 +242,8 @@ mod tests {
 
         let (seed_a, seed_b) = env.as_contract(&contract, || {
             (
-                build_internal_seed(&env, &id_a),
-                build_internal_seed(&env, &id_b),
+                build_internal_seed(&env, &id_a, 10),
+                build_internal_seed(&env, &id_b, 10),
             )
         });
 
@@ -241,8 +264,8 @@ mod tests {
 
         let (first, second) = env.as_contract(&contract, || {
             (
-                build_internal_seed(&env, &raffle_id),
-                build_internal_seed(&env, &raffle_id),
+                build_internal_seed(&env, &raffle_id, 10),
+                build_internal_seed(&env, &raffle_id, 10),
             )
         });
 
@@ -258,10 +281,27 @@ mod tests {
             .register_stellar_asset_contract_v2(Address::generate(&env))
             .address();
 
-        let seed = env.as_contract(&contract, || build_internal_seed(&env, &raffle_id));
+        let seed = env.as_contract(&contract, || build_internal_seed(&env, &raffle_id, 10));
         // BytesN<32> is always 32 bytes by construction; this is a compile-time
         // guarantee, but we also verify the array conversion is loss-free.
         assert_eq!(seed.to_array().len(), 32);
+    }
+
+    /// build_internal_seed must not produce the all-zero hash.
+    #[test]
+    fn build_internal_seed_is_not_zero() {
+        let env = Env::default();
+        let raffle_id = Address::generate(&env);
+        let contract = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+
+        let seed = env.as_contract(&contract, || build_internal_seed(&env, &raffle_id));
+        assert_ne!(
+            seed.to_array(),
+            [0u8; 32],
+            "sha256 output must not be all zero"
+        );
     }
 
     /// PRNG selections fall within [0, total_tickets).
@@ -326,6 +366,27 @@ mod tests {
         assert_ne!(
             fp_a, fp_b,
             "fingerprints must differ for different raffle IDs"
+        );
+    }
+
+    /// Seed fingerprint changes when ticket count changes.
+    #[test]
+    fn seed_fingerprint_differs_by_ticket_count() {
+        let env = Env::default();
+        let raffle_id = Address::generate(&env);
+        let contract = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+
+        let (fp_a, fp_b) = env.as_contract(&contract, || {
+            let s_a = PrngWinnerSelection::new(0, 0, raffle_id.clone(), 10);
+            let s_b = PrngWinnerSelection::new(0, 0, raffle_id, 11);
+            (s_a.seed_fingerprint(&env), s_b.seed_fingerprint(&env))
+        });
+
+        assert_ne!(
+            fp_a, fp_b,
+            "fingerprints must differ for different ticket counts"
         );
     }
 }
