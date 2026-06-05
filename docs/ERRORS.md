@@ -85,6 +85,7 @@ The factory contract (`RaffleFactory`) manages raffle creation. All error codes 
 | ---- | ---------------------- | ------------------------------ | -------------------------------- |
 | 11   | `AdminTransferPending` | Admin transfer already pending | "Admin transfer already pending" |
 | 12   | `NoPendingTransfer`    | No pending admin transfer      | "No pending admin transfer"      |
+| 18   | `UnsupportedSac`       | Payment token is not whitelisted as a supported Stellar Asset Contract | "Unsupported payment token" |
 
 ---
 

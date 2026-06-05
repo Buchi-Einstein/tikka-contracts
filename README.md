@@ -96,7 +96,7 @@ flowchart TD
     Creator -->|"deposit_prize()"| Token
     Token -->|"transfer(prize)"| Raffle
 
-    Buyer -->|"buy_ticket()"| Token
+    Buyer -->|"buy_tickets()"| Token
     Token -->|"transfer(ticket_price)"| Raffle
 
     Raffle -->|"finalize_raffle()"| Raffle
@@ -142,20 +142,31 @@ pub fn get_raffle(... ) -> Result<Raffle, Error>;
 
 ```rust
 pub struct Raffle {
-    pub id: u64,
     pub creator: Address,
+    pub payment_token: Address,
+    pub treasury_address: Option<Address>,
     pub description: String,
     pub end_time: u64,
     pub max_tickets: u32,
+    pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
-    pub payment_token: Address,
     pub prize_amount: i128,
+    pub prizes: Vec<u32>,
     pub tickets_sold: u32,
-    pub is_active: bool,
+    pub status: RaffleStatus,
     pub prize_deposited: bool,
-    pub prize_claimed: bool,
-    pub winner: Option<Address>,
+    pub winners: Vec<Address>,
+    pub claimed_winners: Vec<bool>,
+    pub randomness_source: RandomnessSource,
+    pub oracle_address: Option<Address>,
+    pub protocol_fee_bp: u32,
+    pub treasury_address: Option<Address>,
+    pub swap_router: Option<Address>,
+    pub tikka_token: Option<Address>,
+    pub finalized_at: Option<u64>,
+    pub winner_ticket_id: Option<u32>,
+    pub claim_lockup_seconds: u64,
 }
 ```
 
@@ -255,6 +266,7 @@ cargo test -p raffle-instance
 ### **Build the Contract**
 
 ```bash
+cargo build -p raffle-instance
 cargo build -p raffle-factory
 cargo build -p raffle-instance
 ```

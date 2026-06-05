@@ -20,8 +20,9 @@ Welcome to the `tikka-contracts` development guide! This document covers setting
 ### Build the Contract
 To compile the Soroban contract into WebAssembly (`.wasm`):
 ```bash
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32-unknown-unknown --release -p raffle-instance
 ```
+The compiled WASM binary will be located at `target/wasm32-unknown-unknown/release/raffle-instance.wasm`.
 The compiled WASM binary will be located at `target/wasm32-unknown-unknown/release/raffle_factory.wasm`.
 
 ### Run Unit Tests
