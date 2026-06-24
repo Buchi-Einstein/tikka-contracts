@@ -116,6 +116,7 @@ fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn require_registered_raffle(env: &Env, raffle_address: &Address) -> Result<(), ContractError> {
     raffle_address.require_auth();
 
@@ -764,7 +765,7 @@ impl RaffleFactory {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client
+        let _ = token_client
             .try_transfer(&env.current_contract_address(), &recipient, &amount)
             .map_err(|_| ContractError::InvalidParameters)?;
 

@@ -239,7 +239,7 @@ fn require_not_paused(env: &Env) -> Result<(), Error> {
 
 fn validate_token_address(env: &Env, token_address: &Address) -> Result<(), Error> {
     let token_client = token::Client::new(env, token_address);
-    token_client
+    let _ = token_client
         .try_decimals()
         .map_err(|_| Error::InvalidTokenAddress)?;
     Ok(())
@@ -560,7 +560,6 @@ impl Contract {
             .instance()
             .get::<_, Address>(&DataKey::Factory)
         {
-            let contract_address = env.current_contract_address();
             let record_volume_args: Vec<Val> =
                 (raffle.payment_token.clone(), total_price).into_val(&env);
 
@@ -936,7 +935,7 @@ impl Contract {
     }
 
     pub fn withdraw_fees(env: Env, recipient: Address, amount: i128) -> Result<(), Error> {
-        let admin = require_admin(&env)?;
+        let _admin = require_admin(&env)?;
 
         let raffle = read_raffle(&env)?;
         if raffle.status != RaffleStatus::Finalized && raffle.status != RaffleStatus::Claimed {
@@ -1288,7 +1287,7 @@ impl Contract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client
+        let _ = token_client
             .try_transfer(&env.current_contract_address(), &recipient, &amount)
             .map_err(|_| Error::TokenTransferFailed)?;
 
@@ -1305,7 +1304,7 @@ impl Contract {
     }
 
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
-        let old_admin = require_admin(&env)?;
+        let _old_admin = require_admin(&env)?;
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
         Ok(())
     }
@@ -1473,8 +1472,6 @@ mod test {
         let addr = sac.address();
         (addr.clone(), token::StellarAssetClient::new(env, &addr))
     }
-    use soroban_sdk::contractimpl as _contractimpl; // ensure macro in scope (already imported)
-
     #[contract]
     pub struct MockFactory;
 

@@ -1,6 +1,7 @@
 use raffle_shared::AdminOp;
 use soroban_sdk::{contractevent, Address, BytesN};
 
+#[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
 pub struct RaffleInstanceDeployed {
@@ -37,6 +38,7 @@ pub struct AdminOpExecuted {
     pub executed_at: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
 pub struct TreasuryChanged {
@@ -85,6 +87,7 @@ pub struct AdminTransferAccepted {
     pub timestamp: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
 pub struct AdminTransferFailed {
@@ -103,6 +106,7 @@ pub struct CheckpointCreated {
     pub aggregate_hash: BytesN<32>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
 pub struct SupportedSacUpdated {

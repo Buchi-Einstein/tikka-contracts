@@ -214,6 +214,7 @@ pub struct EmergencyWithdrawn {
     pub timestamp: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
 pub struct AdminChanged {
