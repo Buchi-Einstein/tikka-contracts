@@ -113,10 +113,8 @@ impl PrngWinnerSelection {
     /// on-chain `FairnessMetadata` event.  This is derived from the same
     /// inputs as the actual seed so it can be used to spot-check draws.
     pub fn seed_fingerprint(&self, env: &Env) -> u64 {
-        // Mix the build_internal_seed output down to a u64 for the fairness proof.
-        let seed_bytes: BytesN<32> = build_internal_seed(env, &self.raffle_id, self.tickets_sold);
-        let arr = seed_bytes.to_array();
-        // Take the first 8 bytes as big-endian u64.
+        let hashed = hash_bytes32(env, &self.seed_bytes(env));
+        let arr = hashed.to_array();
         u64::from_be_bytes([
             arr[0], arr[1], arr[2], arr[3], arr[4], arr[5], arr[6], arr[7],
         ])
@@ -143,12 +141,13 @@ impl WinnerSelectionStrategy for PrngWinnerSelection {
         // for details on the entropy inputs.
         env.prng().seed(self.seed_bytes(env));
 
-        for _ in 0..winner_count {
+        let effective_count = winner_count.min(total_tickets);
+        for _ in 0..effective_count {
             // Keep sampling until we find an index that hasn't been selected yet
             loop {
                 #[allow(deprecated)]
                 let idx = env.prng().u64_in_range(0..(total_tickets as u64)) as u32;
-                
+
                 // Check if this index is already in the selected indices
                 let mut found = false;
                 for i in 0..indices.len() {
@@ -157,7 +156,7 @@ impl WinnerSelectionStrategy for PrngWinnerSelection {
                         break;
                     }
                 }
-                
+
                 // If not found, add it and break; otherwise resample
                 if !found {
                     indices.push_back(idx);
@@ -242,8 +241,8 @@ mod tests {
 
         let (seed_a, seed_b) = env.as_contract(&contract, || {
             (
-                build_internal_seed(&env, &id_a, 10),
-                build_internal_seed(&env, &id_b, 10),
+                build_internal_seed(&env, &id_a),
+                build_internal_seed(&env, &id_b),
             )
         });
 
@@ -264,8 +263,8 @@ mod tests {
 
         let (first, second) = env.as_contract(&contract, || {
             (
-                build_internal_seed(&env, &raffle_id, 10),
-                build_internal_seed(&env, &raffle_id, 10),
+                build_internal_seed(&env, &raffle_id),
+                build_internal_seed(&env, &raffle_id),
             )
         });
 
@@ -281,7 +280,7 @@ mod tests {
             .register_stellar_asset_contract_v2(Address::generate(&env))
             .address();
 
-        let seed = env.as_contract(&contract, || build_internal_seed(&env, &raffle_id, 10));
+        let seed = env.as_contract(&contract, || build_internal_seed(&env, &raffle_id));
         // BytesN<32> is always 32 bytes by construction; this is a compile-time
         // guarantee, but we also verify the array conversion is loss-free.
         assert_eq!(seed.to_array().len(), 32);
@@ -317,7 +316,7 @@ mod tests {
         let indices = env.as_contract(&contract_id, || {
             strategy.select_winner_indices(&env, 17, 25)
         });
-        assert_eq!(indices.len(), 25);
+        assert_eq!(indices.len(), 17);
         for idx in indices.iter() {
             assert!(idx < 17, "winner index {idx} must be < total_tickets 17");
         }

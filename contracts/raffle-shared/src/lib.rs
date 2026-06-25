@@ -16,7 +16,7 @@ pub enum RaffleStatus {
     Cancelled = 3,
     Failed = 4,
     Claimed = 5,
-    Finalizing = 6,
+    Finalizing = 7,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -51,7 +51,6 @@ pub struct RaffleConfig {
     pub end_time: u64,
     pub no_deadline: bool,
     pub max_tickets: u32,
-    pub max_tickets_per_wallet: Option<u32>,
     pub min_tickets: u32,
     pub allow_multiple: bool,
     pub ticket_price: i128,
@@ -117,7 +116,6 @@ pub struct PageResultTickets {
 #[contracttype]
 pub enum AdminOp {
     SetConfig(u32, Address),
-    /// Governance-gated update of the WASM hash used for new raffle instance deployments.
     UpdateWasmHash(BytesN<32>),
 }
 

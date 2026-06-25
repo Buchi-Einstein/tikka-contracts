@@ -1,7 +1,6 @@
 use raffle_shared::{CancelReason, RandomnessSource, RandomnessType};
 use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 
-
 #[derive(Clone)]
 #[contractevent]
 pub struct RaffleCreated {
@@ -177,6 +176,33 @@ pub struct ContractUnpaused {
     pub timestamp: u64,
 }
 
+#[derive(Clone)]
+#[contractevent]
+pub struct TokensRescued {
+    pub rescued_by: Address,
+    pub token: Address,
+    pub recipient: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct OracleAddressUpdated {
+    pub old_oracle: Option<Address>,
+    pub new_oracle: Address,
+    pub updated_by: Address,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct ProtocolFeeUpdated {
+    pub old_fee_bp: u32,
+    pub new_fee_bp: u32,
+    pub updated_by: Address,
+    pub timestamp: u64,
+}
 
 #[derive(Clone)]
 #[contractevent]
@@ -188,6 +214,7 @@ pub struct EmergencyWithdrawn {
     pub timestamp: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
 pub struct AdminChanged {
