@@ -291,6 +291,43 @@ fn request_randomness(env: &Env) -> Result<u64, Error> {
     Ok(request_id)
 }
 
+/// Atomically transitions the raffle to Drawing status and sets DrawingLock
+///
+/// # SECURITY: This function is the single source of truth for entering Drawing status!
+fn transition_to_drawing(env: &Env, raffle: &mut Raffle, timestamp: u64) -> Result<(), Error> {
+    // SECURITY: Fast path guard: check DrawingLock first!
+    let drawing_lock: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::DrawingLock)
+        .unwrap_or(false);
+    if drawing_lock {
+        return Err(Error::DrawingAlreadyInProgress);
+    }
+    // Check current status before allowing transition
+    if raffle.status != RaffleStatus::Active && raffle.status != RaffleStatus::Drawing {
+        return Err(Error::InvalidStatusForDrawingTransition);
+    }
+
+    if raffle.status == RaffleStatus::Active {
+        let old_status = raffle.status.clone();
+        raffle.status = RaffleStatus::Drawing;
+        write_raffle(env, raffle);
+        RaffleStatusChanged {
+            old_status,
+            new_status: RaffleStatus::Drawing,
+            timestamp,
+        }
+        .publish(env);
+    }
+
+    // Atomically set the DrawingLock
+    env.storage()
+        .instance()
+        .set(&DataKey::DrawingLock, &true);
+    Ok(())
+}
+
 fn require_not_paused(env: &Env) -> Result<(), Error> {
     if env
         .storage()
@@ -565,6 +602,15 @@ impl Contract {
     }
 
     pub fn buy_tickets(env: Env, buyer: Address, quantity: u32) -> Result<u32, Error> {
+        // SECURITY: Fast path guard for DrawingLock!
+        let drawing_lock: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::DrawingLock)
+            .unwrap_or(false);
+        if drawing_lock {
+            return Err(Error::DrawingAlreadyInProgress);
+        }
         if quantity == 0 {
             return Err(Error::InvalidQuantity);
         }
@@ -585,20 +631,21 @@ impl Contract {
             return Err(Error::RaffleExpired);
         }
 
-        if raffle.tickets_sold + quantity > raffle.max_tickets {
-            return Err(Error::TicketsSoldOut);
-        }
-
+        // SECURITY: Snapshot initial state for optimistic concurrency control
+        let snapshot_sold = raffle.tickets_sold;
         let current_count: u32 = env
             .storage()
             .persistent()
             .get(&DataKey::TicketCount(buyer.clone()))
             .unwrap_or(0);
+
+        if snapshot_sold + quantity > raffle.max_tickets {
+            return Err(Error::TicketsSoldOut);
+        }
         if !raffle.allow_multiple && (current_count > 0 || quantity > 1) {
             return Err(Error::MultipleTicketsNotAllowed);
         }
 
-        let mut ticket_ids = Vec::new(&env);
         let timestamp = env.ledger().timestamp();
         let total_price = raffle
             .ticket_price
@@ -611,15 +658,33 @@ impl Contract {
             / 10000;
         let _net_amount = total_price - protocol_fee;
 
-        for _ in 0..quantity {
-            raffle.tickets_sold += 1;
-            let ticket_id = raffle.tickets_sold;
+        // SECURITY: Re-read persisted state and verify no concurrent changes
+        let persisted_raffle = read_raffle(&env)?;
+        let persisted_sold = persisted_raffle.tickets_sold;
+        let persisted_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TicketCount(buyer.clone()))
+            .unwrap_or(0);
 
+        if persisted_sold != snapshot_sold || persisted_count != current_count {
+            return Err(Error::InvalidStateTransition);
+        }
+
+        // Final availability check against persisted values
+        if persisted_sold + quantity > persisted_raffle.max_tickets {
+            return Err(Error::TicketsSoldOut);
+        }
+
+        // Now commit all changes atomically
+        let mut ticket_ids = Vec::new(&env);
+        for i in 0..quantity {
+            let ticket_id = snapshot_sold + i + 1;
             let ticket = Ticket {
                 id: ticket_id,
                 owner: buyer.clone(),
                 purchase_time: timestamp,
-                ticket_number: raffle.tickets_sold,
+                ticket_number: ticket_id,
             };
             env.storage()
                 .persistent()
@@ -627,17 +692,16 @@ impl Contract {
             ticket_ids.push_back(ticket_id);
         }
 
-        if raffle.tickets_sold >= raffle.max_tickets {
-            let old_status = raffle.status.clone();
-            raffle.status = RaffleStatus::Drawing;
-            RaffleStatusChanged {
-                old_status,
-                new_status: RaffleStatus::Drawing,
-                timestamp,
-            }
-            .publish(&env);
+        // Update ticket count and raffle sold
+        env.storage().persistent().set(
+            &DataKey::TicketCount(buyer.clone()),
+            &(current_count + quantity),
+        );
+        raffle.tickets_sold = snapshot_sold + quantity;
 
-            // SECURITY: Atomically request randomness when transitioning to Drawing
+        if raffle.tickets_sold >= raffle.max_tickets {
+            transition_to_drawing(&env, &mut raffle, timestamp)?;
+            // SECURITY: Atomically request randomness after transitioning to Drawing
             if raffle.randomness_source == RandomnessSource::External {
                 let request_id = request_randomness(&env)?;
                 DrawTriggered {
@@ -659,10 +723,6 @@ impl Contract {
             }
         }
 
-        env.storage().persistent().set(
-            &DataKey::TicketCount(buyer.clone()),
-            &(current_count + quantity),
-        );
         write_raffle(&env, &raffle);
 
         if let Some(factory_address) = env
@@ -772,6 +832,15 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
+        // SECURITY: Fast path guard for DrawingLock!
+        let drawing_lock: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::DrawingLock)
+            .unwrap_or(false);
+        if drawing_lock {
+            return Err(Error::DrawingAlreadyInProgress);
+        }
         let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
 
@@ -812,18 +881,7 @@ impl Contract {
 
         let caller = raffle.creator.clone();
 
-        // Transition to Drawing if we're still in Active
-        if raffle.status == RaffleStatus::Active {
-            let old_status = raffle.status.clone();
-            raffle.status = RaffleStatus::Drawing;
-            write_raffle(&env, &raffle);
-            RaffleStatusChanged {
-                old_status,
-                new_status: RaffleStatus::Drawing,
-                timestamp: now,
-            }
-            .publish(&env);
-        }
+        transition_to_drawing(&env, &mut raffle, now)?;
 
         if raffle.randomness_source == RandomnessSource::External {
             let request_id = request_randomness(&env)?;
@@ -898,6 +956,18 @@ impl Contract {
         proof: BytesN<64>,
         request_id: u64,
     ) -> Result<Address, Error> {
+        // # SECURITY: DrawingAlreadyComplete guard — DrawingLock=false means either winner
+        // selection completed or the lock was never legitimately set; reject to prevent double
+        // winner write
+        let drawing_lock: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::DrawingLock)
+            .unwrap_or(false);
+        if !drawing_lock {
+            return Err(Error::DrawingAlreadyComplete);
+        }
+
         let raffle = read_raffle(&env)?;
 
         let oracle = match &raffle.oracle_address {
@@ -951,6 +1021,17 @@ impl Contract {
         caller: Address,
         do_refund: bool,
     ) -> Result<(), Error> {
+        // # SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
+        // already in progress; reject without reading further state
+        let drawing_lock: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::DrawingLock)
+            .unwrap_or(false);
+        if drawing_lock {
+            return Err(Error::DrawingAlreadyInProgress);
+        }
+
         caller.require_auth();
         let mut raffle = read_raffle(&env)?;
 
@@ -988,6 +1069,20 @@ impl Contract {
         if do_refund {
             raffle.status = RaffleStatus::Cancelled;
             write_raffle(&env, &raffle);
+
+            // Clear pending randomness and DrawingLock when cancelling
+            env.storage()
+                .instance()
+                .remove(&DataKey::RandomnessRequested);
+            env.storage()
+                .instance()
+                .remove(&DataKey::RandomnessRequestId);
+            env.storage()
+                .instance()
+                .remove(&DataKey::RandomnessRequestLedger);
+            env.storage()
+                .instance()
+                .remove(&DataKey::DrawingLock);
 
             RaffleCancelled {
                 creator: raffle.creator.clone(),
@@ -1645,6 +1740,10 @@ fn do_finalize_with_seed(
     env.storage()
         .instance()
         .remove(&DataKey::RandomnessRequestLedger);
+    // # SECURITY: Clear DrawingLock LAST, after all winner state is committed
+    env.storage()
+        .instance()
+        .remove(&DataKey::DrawingLock);
 
     RaffleFinalized {
         raffle_id: env.current_contract_address(),
