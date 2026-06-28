@@ -343,6 +343,10 @@ impl Contract {
         if !config.no_deadline && config.end_time <= now {
             return Err(Error::InvalidParameters);
         }
+        // Explicit check: end_time must be either 0 (no deadline) or in the future
+        if config.end_time != 0 && config.end_time <= now {
+            return Err(Error::InvalidEndTime);
+        }
         if config.max_tickets == 0 || config.max_tickets > MAX_TICKETS_LIMIT {
             return Err(Error::InvalidParameters);
         }
