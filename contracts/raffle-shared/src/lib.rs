@@ -30,6 +30,13 @@ pub enum CancelReason {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[contracttype]
+pub enum FailureReason {
+    ZeroTicketsSold = 0,
+    MinTicketsNotMet = 1,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[contracttype]
 pub enum RandomnessSource {
     Internal = 0,
     External = 1,

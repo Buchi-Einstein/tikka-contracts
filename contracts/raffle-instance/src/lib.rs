@@ -11,7 +11,7 @@ mod events;
 mod randomness;
 
 use raffle_shared::{
-    CancelReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource, RandomnessType,
+    CancelReason, FailureReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource, RandomnessType,
     Ticket,
 };
 
@@ -20,7 +20,7 @@ use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
 use crate::events::{
     ContractPaused, ContractUnpaused, DrawTriggered, EmergencyWithdrawn, FeesWithdrawn,
     OracleAddressUpdated, PrizeClaimed, PrizeDeposited, PrizeRefunded, ProtocolFeeUpdated,
-    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleStatusChanged,
+    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleFailed, RaffleStatusChanged,
     RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, TicketPurchased,
     TicketRefunded, TokensRescued, WinnerDrawn,
 };
@@ -651,9 +651,16 @@ impl Contract {
             raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
 
-            RaffleStatusChanged {
-                old_status,
-                new_status: RaffleStatus::Failed,
+            let failure_reason = if raffle.tickets_sold == 0 {
+                FailureReason::ZeroTicketsSold
+            } else {
+                FailureReason::MinTicketsNotMet
+            };
+
+            RaffleFailed {
+                creator: raffle.creator.clone(),
+                reason: failure_reason,
+                tickets_sold: raffle.tickets_sold,
                 timestamp: now,
             }
             .publish(&env);
