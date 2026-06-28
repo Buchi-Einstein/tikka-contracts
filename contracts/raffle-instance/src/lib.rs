@@ -1173,7 +1173,7 @@ impl Contract {
     pub fn get_fairness_data(env: Env) -> Result<FairnessData, Error> {
         let metadata: FairnessMetadata = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::RandomnessSeed)
             .ok_or(Error::InvalidStatus)?;
         let raffle = read_raffle(&env)?;
@@ -1425,7 +1425,7 @@ fn do_finalize_with_seed(
         draw_sequence: env.ledger().sequence(),
     };
     env.storage()
-        .instance()
+        .persistent()
         .set(&DataKey::RandomnessSeed, &fairness_metadata);
 
     raffle.status = RaffleStatus::Finalized;
