@@ -254,6 +254,43 @@ impl<'a> Drop for Guard<'a> {
     }
 }
 
+// Helper function to request randomness (used in both buy_tickets and finalize_raffle)
+fn request_randomness(env: &Env) -> Result<u64, Error> {
+    let already: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::RandomnessRequested)
+        .unwrap_or(false);
+    if already {
+        return Err(Error::RandomnessAlreadyRequested);
+    }
+
+    // Generate unique request ID
+    let request_id_xdr = (
+        env.ledger().timestamp(),
+        env.ledger().sequence(),
+        env.current_contract_address().to_xdr(env),
+    )
+    .to_xdr(env);
+    let request_id_hash: BytesN<32> = env.crypto().sha256(&request_id_xdr).into();
+    let arr = request_id_hash.to_array();
+    let mut id_bytes = [0u8; 8];
+    id_bytes.copy_from_slice(&arr[..8]);
+    let request_id = u64::from_be_bytes(id_bytes);
+
+    env.storage()
+        .instance()
+        .set(&DataKey::RandomnessRequested, &true);
+    env.storage()
+        .instance()
+        .set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
+    env.storage()
+        .instance()
+        .set(&DataKey::RandomnessRequestId, &request_id);
+
+    Ok(request_id)
+}
+
 fn require_not_paused(env: &Env) -> Result<(), Error> {
     if env
         .storage()
@@ -599,6 +636,27 @@ impl Contract {
                 timestamp,
             }
             .publish(&env);
+
+            // SECURITY: Atomically request randomness when transitioning to Drawing
+            if raffle.randomness_source == RandomnessSource::External {
+                let request_id = request_randomness(&env)?;
+                DrawTriggered {
+                    caller: buyer.clone(),
+                    total_tickets_sold: raffle.tickets_sold,
+                    timestamp,
+                }
+                .publish(&env);
+
+                RandomnessRequested {
+                    oracle: raffle
+                        .oracle_address
+                        .clone()
+                        .unwrap_or(env.current_contract_address()),
+                    request_id,
+                    timestamp,
+                }
+                .publish(&env);
+            }
         }
 
         env.storage().persistent().set(
@@ -754,39 +812,21 @@ impl Contract {
 
         let caller = raffle.creator.clone();
 
-        if raffle.randomness_source == RandomnessSource::External {
-            let already: bool = env
-                .storage()
-                .instance()
-                .get(&DataKey::RandomnessRequested)
-                .unwrap_or(false);
-            if already {
-                return Err(Error::RandomnessAlreadyRequested);
+        // Transition to Drawing if we're still in Active
+        if raffle.status == RaffleStatus::Active {
+            let old_status = raffle.status.clone();
+            raffle.status = RaffleStatus::Drawing;
+            write_raffle(&env, &raffle);
+            RaffleStatusChanged {
+                old_status,
+                new_status: RaffleStatus::Drawing,
+                timestamp: now,
             }
+            .publish(&env);
+        }
 
-            // Generate unique request ID to prevent replay attacks
-            let request_id_xdr = (
-                env.ledger().timestamp(),
-                env.ledger().sequence(),
-                env.current_contract_address().to_xdr(&env),
-            )
-                .to_xdr(&env);
-            let request_id_hash: BytesN<32> = env.crypto().sha256(&request_id_xdr).into();
-            let arr = request_id_hash.to_array();
-            let mut id_bytes = [0u8; 8];
-            id_bytes.copy_from_slice(&arr[..8]);
-            let request_id = u64::from_be_bytes(id_bytes);
-
-            env.storage()
-                .instance()
-                .set(&DataKey::RandomnessRequested, &true);
-            env.storage()
-                .instance()
-                .set(&DataKey::RandomnessRequestLedger, &env.ledger().sequence());
-            env.storage()
-                .instance()
-                .set(&DataKey::RandomnessRequestId, &request_id);
-
+        if raffle.randomness_source == RandomnessSource::External {
+            let request_id = request_randomness(&env)?;
             DrawTriggered {
                 caller: caller.clone(),
                 total_tickets_sold: raffle.tickets_sold,
