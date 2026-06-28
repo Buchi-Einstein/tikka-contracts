@@ -1602,6 +1602,18 @@ impl Contract {
 
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let _old_admin = require_admin(&env)?;
+
+        // Block setting admin to the zero address (all-zero contract id).
+        // Block setting admin to the zero address (all-zero contract id) or any non-existent address.
+        if !new_admin.exists() {
+            return Err(Error::InvalidAdminAddress);
+        }
+
+        // Block assigning the admin to this contract's own address.
+        if new_admin == env.current_contract_address() {
+            return Err(Error::InvalidAdminAddress);
+        }
+
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
         Ok(())
     }
