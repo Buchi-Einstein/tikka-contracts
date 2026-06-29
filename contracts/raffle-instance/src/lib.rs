@@ -1393,8 +1393,21 @@ impl Contract {
                 }
             }
             RaffleStatus::Drawing => {
-                if raffle.end_time == 0 || now < raffle.end_time + EMERGENCY_WITHDRAW_DELAY_SECONDS
-                {
+                if raffle.no_deadline {
+                    let request_ledger: u32 = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::RandomnessRequestLedger)
+                        .unwrap_or(0);
+                    let estimated_seconds = (env
+                        .ledger()
+                        .sequence()
+                        .saturating_sub(request_ledger) as u64)
+                        * 5;
+                    if estimated_seconds < EMERGENCY_WITHDRAW_DELAY_SECONDS {
+                        return Err(Error::EmergencyTooEarly);
+                    }
+                } else if now < raffle.end_time + EMERGENCY_WITHDRAW_DELAY_SECONDS {
                     return Err(Error::EmergencyTooEarly);
                 }
             }
@@ -2275,5 +2288,132 @@ mod test {
                 .persistent()
                 .has(&DataKey::Admin));
         });
+    }
+
+    #[test]
+    fn emergency_withdraw_no_deadline_drawing_respects_delay() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let oracle = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let (token_addr, token_mint) = create_token(&env, &token_admin);
+        token_mint.mint(&creator, &10_000_000);
+
+        let config = RaffleConfig {
+            description: String::from_str(&env, "no-deadline drawing"),
+            end_time: 0,
+            no_deadline: true,
+            max_tickets: 5,
+            max_tickets_per_tx: 5,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr.clone(),
+            prize_amount: MIN_TICKET_PRICE * 5,
+            prizes: vec![&env, 10000u32],
+            randomness_source: RandomnessSource::External,
+            oracle_address: Some(oracle.clone()),
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[3u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+        client.buy_tickets(&creator, &5);
+
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.status, RaffleStatus::Drawing);
+        assert!(raffle.no_deadline);
+
+        let too_early = client.try_emergency_withdraw(&creator);
+        assert_eq!(too_early.err(), Some(Ok(Error::EmergencyTooEarly)));
+
+        let ledgers_for_delay =
+            (EMERGENCY_WITHDRAW_DELAY_SECONDS / 5) as u32 + 1;
+        env.ledger().with_mut(|l| {
+            l.sequence_number += ledgers_for_delay;
+        });
+
+        client.emergency_withdraw(&creator);
+
+        let after = client.get_raffle();
+        assert_eq!(after.status, RaffleStatus::Cancelled);
+        assert!(!after.prize_deposited);
+    }
+
+    #[test]
+    fn emergency_withdraw_deadline_drawing_respects_end_time_delay() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(&env, &contract_id);
+
+        let factory = env.register(MockFactory, ());
+        let admin = Address::generate(&env);
+        let creator = Address::generate(&env);
+        let oracle = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let (token_addr, token_mint) = create_token(&env, &token_admin);
+        token_mint.mint(&creator, &10_000_000);
+
+        let end_time = 5_000u64;
+        let config = RaffleConfig {
+            description: String::from_str(&env, "deadline drawing"),
+            end_time,
+            no_deadline: false,
+            max_tickets: 5,
+            max_tickets_per_tx: 5,
+            min_tickets: 1,
+            allow_multiple: true,
+            ticket_price: MIN_TICKET_PRICE,
+            payment_token: token_addr.clone(),
+            prize_amount: MIN_TICKET_PRICE * 5,
+            prizes: vec![&env, 10000u32],
+            randomness_source: RandomnessSource::External,
+            oracle_address: Some(oracle.clone()),
+            protocol_fee_bp: 0,
+            treasury_address: None,
+            swap_router: None,
+            tikka_token: None,
+            metadata_hash: BytesN::from_array(&env, &[4u8; 32]),
+            claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
+        };
+
+        client.init(&factory, &admin, &creator, &config);
+        client.deposit_prize();
+        client.buy_tickets(&creator, &3);
+        env.ledger().set_timestamp(end_time);
+        client.finalize_raffle();
+
+        let raffle = client.get_raffle();
+        assert_eq!(raffle.status, RaffleStatus::Drawing);
+        assert!(!raffle.no_deadline);
+
+        let too_early = client.try_emergency_withdraw(&creator);
+        assert_eq!(too_early.err(), Some(Ok(Error::EmergencyTooEarly)));
+
+        env.ledger().set_timestamp(end_time + EMERGENCY_WITHDRAW_DELAY_SECONDS + 1);
+        client.emergency_withdraw(&creator);
+
+        let after = client.get_raffle();
+        assert_eq!(after.status, RaffleStatus::Cancelled);
     }
 }
