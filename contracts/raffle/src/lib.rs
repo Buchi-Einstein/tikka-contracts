@@ -126,8 +126,6 @@ fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
     Ok(())
 }
 
-
-
 fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
     if raffle_count == 0 || !raffle_count.is_multiple_of(CHECKPOINT_INTERVAL) {
         return;
