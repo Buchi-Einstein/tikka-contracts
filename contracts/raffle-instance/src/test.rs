@@ -537,3 +537,165 @@ fn test_allow_multiple_false_single_ticket_per_buyer() {
         });
     assert_eq!(buyer_b_count, 1);
 }
+
+#[test]
+fn test_provide_randomness_fails_too_early() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // 1. Setup factory, admin, creator
+    let factory = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let payment_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = StellarAssetClient::new(&env, &payment_token);
+    token_client.mint(&creator, &100_000_000);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    // 2. Initialize Raffle with External Randomness
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Test Raffle Early Randomness"),
+        end_time: 0,
+        no_deadline: true,
+        max_tickets: 10,
+        max_tickets_per_tx: 10,
+        min_tickets: 1,
+        allow_multiple: true,
+        ticket_price: 10_000,
+        payment_token: payment_token.clone(),
+        prize_amount: 10_000,
+        prizes: soroban_sdk::vec![&env, 10000],
+        randomness_source: RandomnessSource::External,
+        oracle_address: Some(oracle.clone()),
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[1; 32]),
+        claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
+    };
+
+    client.init(&factory, &admin, &creator, &config);
+
+    // Remove factory from storage so buy_tickets skips the factory code path
+    env.as_contract(&contract_id, || {
+        env.storage().instance().remove(&DataKey::Factory);
+    });
+
+    // 3. Deposit prize and buy ticket
+    client.deposit_prize();
+    client.buy_tickets(&creator, &10);
+
+    // 4. Finalize raffle (requests randomness)
+    client.finalize_raffle();
+
+    // 5. Get request_id
+    let request_id: u64 = env
+        .as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get(&crate::DataKey::RandomnessRequestId)
+                .unwrap_or(0)
+        });
+
+    // 6. Try providing randomness immediately (should fail)
+    let (pk, sk) = env.crypto().ed25519_key_pair();
+    let seed = 123456789;
+    let message = seed.to_be_bytes();
+    let proof = env.crypto().ed25519_sign(&sk, &message);
+    let result = client.try_provide_randomness(&seed, &pk, &proof, &request_id);
+    assert_eq!(result.err(), Some(Ok(Error::RandomnessTooEarly)));
+}
+
+#[test]
+fn test_provide_randomness_succeeds_after_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // 1. Setup factory, admin, creator
+    let factory = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let payment_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = StellarAssetClient::new(&env, &payment_token);
+    token_client.mint(&creator, &100_000_000);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    // 2. Initialize Raffle with External Randomness
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Test Raffle Delayed Randomness"),
+        end_time: 0,
+        no_deadline: true,
+        max_tickets: 10,
+        max_tickets_per_tx: 10,
+        min_tickets: 1,
+        allow_multiple: true,
+        ticket_price: 10_000,
+        payment_token: payment_token.clone(),
+        prize_amount: 10_000,
+        prizes: soroban_sdk::vec![&env, 10000],
+        randomness_source: RandomnessSource::External,
+        oracle_address: Some(oracle.clone()),
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[1; 32]),
+        claim_lockup_seconds: 0,
+        swap_deadline_seconds: 0,
+    };
+
+    client.init(&factory, &admin, &creator, &config);
+
+    // Remove factory from storage so buy_tickets skips the factory code path
+    env.as_contract(&contract_id, || {
+        env.storage().instance().remove(&DataKey::Factory);
+    });
+
+    // 3. Deposit prize and buy ticket
+    client.deposit_prize();
+    client.buy_tickets(&creator, &10);
+
+    // 4. Finalize raffle (requests randomness)
+    client.finalize_raffle();
+
+    // 5. Simulate 10 ledgers passing
+    env.ledger().with_mut(|l| {
+        l.sequence_number += RANDOMNESS_MIN_DELAY_LEDGERS;
+        l.timestamp += 50; // 10 ledgers * 5 seconds
+    });
+
+    // 6. Get request_id
+    let request_id: u64 = env
+        .as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get(&crate::DataKey::RandomnessRequestId)
+                .unwrap_or(0)
+        });
+
+    // 7. Provide randomness (should succeed)
+    let (pk, sk) = env.crypto().ed25519_key_pair();
+    let seed = 123456789;
+    let message = seed.to_be_bytes();
+    let proof = env.crypto().ed25519_sign(&sk, &message);
+    let result = client.provide_randomness(&seed, &pk, &proof, &request_id);
+    assert_eq!(result, contract_id);
+
+    // 8. Verify final state
+    let raffle_after = client.get_raffle();
+    assert_eq!(raffle_after.status, RaffleStatus::Finalized);
+}
