@@ -11,8 +11,8 @@ mod events;
 mod randomness;
 
 use raffle_shared::{
-    CancelReason, FailureReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource, RandomnessType,
-    Ticket,
+    CancelReason, FailureReason, FairnessData, RaffleConfig, RaffleStatus, RandomnessSource,
+    RandomnessType, Ticket,
 };
 
 use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
@@ -220,6 +220,7 @@ fn acquire_guard(env: &Env) -> Result<(), Error> {
 
 // Helper to enforce slippage and deadline guards for token swaps
 // Uses the raffle's configurable swap_deadline_seconds to calculate the deadline
+#[allow(dead_code)]
 fn enforce_swap_guard(
     env: &Env,
     raffle: &Raffle,
@@ -228,7 +229,7 @@ fn enforce_swap_guard(
 ) -> Result<(), Error> {
     // Calculate deadline based on current timestamp and raffle's configured deadline window
     let deadline = env.ledger().timestamp() + raffle.swap_deadline_seconds;
-    
+
     // Check deadline
     if env.ledger().timestamp() > deadline {
         return Err(Error::DeadlinePassed);
@@ -871,16 +872,6 @@ impl Contract {
     }
 
     pub fn finalize_raffle(env: Env) -> Result<(), Error> {
-        // SECURITY: fast-path guard — if DrawingLock is true, another Drawing transition is
-        // already in progress; reject without reading further state
-        let drawing_lock: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::DrawingLock)
-            .unwrap_or(false);
-        if drawing_lock {
-            return Err(Error::DrawingAlreadyInProgress);
-        }
         let mut raffle = read_raffle(&env)?;
         raffle.creator.require_auth();
 
@@ -899,7 +890,7 @@ impl Contract {
         // #169: zero tickets sold is always a failure regardless of min_tickets,
         // ensuring the creator can recover their deposited prize via refund_prize.
         if raffle.tickets_sold == 0 || raffle.tickets_sold < raffle.min_tickets {
-            let old_status = raffle.status.clone();
+            let _old_status = raffle.status.clone();
             raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
 
@@ -922,7 +913,9 @@ impl Contract {
         let caller = raffle.creator.clone();
         let pre_drawing_status = raffle.status.clone();
 
-        transition_to_drawing(&env, &mut raffle, now)?;
+        if raffle.status != RaffleStatus::Drawing {
+            transition_to_drawing(&env, &mut raffle, now)?;
+        }
 
         if raffle.randomness_source == RandomnessSource::External {
             match request_randomness(&env) {
