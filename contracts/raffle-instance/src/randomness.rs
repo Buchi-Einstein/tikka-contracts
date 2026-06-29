@@ -175,12 +175,14 @@ impl WinnerSelectionStrategy for OracleSeedWinnerSelection {
                 }
                 // Mix the seed to get a new candidate; wrapping_mul with a
                 // large odd constant provides a fast, bias-free step.
-                current_seed = current_seed.wrapping_mul(6364136223846793005)
+                current_seed = current_seed
+                    .wrapping_mul(6364136223846793005)
                     .wrapping_add(1442695040888963407);
             };
             indices.push_back(idx);
             // Advance the seed for the next winner so picks are independent.
-            current_seed = current_seed.wrapping_mul(6364136223846793005)
+            current_seed = current_seed
+                .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
         }
 
