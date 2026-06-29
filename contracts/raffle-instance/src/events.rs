@@ -49,14 +49,6 @@ pub struct TicketPurchased {
 
 #[derive(Clone)]
 #[contractevent]
-pub struct DrawTriggered {
-    pub triggered_by: Address,
-    pub total_tickets_sold: u32,
-    pub timestamp: u64,
-}
-
-#[derive(Clone)]
-#[contractevent]
 pub struct RandomnessRequested {
     pub oracle: Address,
     pub timestamp: u64,

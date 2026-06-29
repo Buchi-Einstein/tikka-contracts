@@ -16,10 +16,9 @@ use raffle_shared::{
 use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
 
 use crate::events::{
-    ContractPaused, ContractUnpaused, DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded,
-    RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleStatusChanged,
-    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, TicketPurchased,
-    WinnerDrawn,
+    ContractPaused, ContractUnpaused, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled,
+    RaffleCreated, RaffleFinalized, RaffleStatusChanged, RandomnessFallbackTriggered,
+    RandomnessReceived, RandomnessRequested, TicketPurchased, WinnerDrawn,
 };
 
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
@@ -321,14 +320,14 @@ impl Contract {
             return Err(Error::PrizeAlreadyDeposited);
         }
 
-        let old_status = raffle.status.clone();
+        let _old_status = raffle.status.clone();
         raffle.prize_deposited = true;
         write_raffle(&env, &raffle);
 
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let contract_address = env.current_contract_address();
 
-        token_client
+        let _ = token_client
             .try_transfer(&raffle.creator, &contract_address, &raffle.prize_amount)
             .map_err(|_| Error::TokenTransferFailed)?;
 
@@ -382,7 +381,7 @@ impl Contract {
             .checked_mul(raffle.protocol_fee_bp as i128)
             .ok_or(Error::ArithmeticOverflow)?
             / 10000;
-        let net_amount = total_price - protocol_fee;
+        let _net_amount = total_price - protocol_fee;
 
         for _ in 0..quantity {
             let ticket_id = next_ticket_id(&env);
@@ -435,7 +434,7 @@ impl Contract {
         }
 
         let token_client = token::Client::new(&env, &raffle.payment_token);
-        token_client
+        let _ = token_client
             .try_transfer(&buyer, &env.current_contract_address(), &total_price)
             .map_err(|_| Error::TokenTransferFailed)?;
 
@@ -526,7 +525,7 @@ impl Contract {
         public_key: BytesN<32>,
         proof: BytesN<64>,
     ) -> Result<Address, Error> {
-        let mut raffle = read_raffle(&env)?;
+        let raffle = read_raffle(&env)?;
 
         let oracle = match &raffle.oracle_address {
             Some(addr) => {
@@ -709,7 +708,7 @@ impl Contract {
             return Err(Error::InvalidStatus);
         }
 
-        let old_status = raffle.status.clone();
+        let _old_status = raffle.status.clone();
         raffle.status = RaffleStatus::Cancelled;
         write_raffle(&env, &raffle);
 
@@ -868,7 +867,7 @@ impl Contract {
             .instance()
             .get(&DataKey::RandomnessSeed)
             .ok_or(Error::InvalidStatus)?;
-        let raffle = read_raffle(&env)?;
+        let _raffle = read_raffle(&env)?;
 
         let mut ticket_ids = Vec::new(&env);
         let count = get_ticket_count(&env);
@@ -1112,41 +1111,6 @@ mod tests {
 
         // Return token_admin as the 3rd element (the caller can mint with it).
         (client, creator, token_admin, token)
-    }
-
-    /// Buy `count` tickets for `buyer`, returns a Vec of the ticket IDs just
-    /// minted (the contract assigns IDs starting from 1, sequentially).
-    fn buy_n_tickets(
-        env: &Env,
-        client: &ContractClient,
-        token: &token::Client,
-        token_admin: &Address,
-        buyer: &Address,
-        count: u32,
-    ) -> Vec<u32> {
-        mint(
-            env,
-            token_admin,
-            &token.address,
-            buyer,
-            100_000i128 * count as i128 * 2,
-        );
-
-        // Read the NextTicketId *before* the purchase.
-        let before: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get::<_, u32>(&DataKey::NextTicketId)
-                .unwrap_or(0)
-        });
-
-        client.buy_tickets(buyer, &count);
-
-        let mut ids = Vec::new(env);
-        for id in (before + 1)..=(before + count) {
-            ids.push_back(id);
-        }
-        ids
     }
 
     // ── tests ─────────────────────────────────────────────────────────────────

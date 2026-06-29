@@ -71,8 +71,8 @@ pub trait WinnerSelectionStrategy {
 /// **For low-stakes raffles only** — see [`build_internal_seed`] for the full
 /// security caveat.
 pub struct PrngWinnerSelection {
-    timestamp: u64,
-    sequence: u32,
+    _timestamp: u64,
+    _sequence: u32,
     raffle_id: Address,
     tickets_sold: u32,
 }
@@ -80,8 +80,8 @@ pub struct PrngWinnerSelection {
 impl PrngWinnerSelection {
     pub fn new(timestamp: u64, sequence: u32, raffle_id: Address, tickets_sold: u32) -> Self {
         Self {
-            timestamp,
-            sequence,
+            _timestamp: timestamp,
+            _sequence: sequence,
             raffle_id,
             tickets_sold,
         }
