@@ -1895,8 +1895,8 @@ mod test {
         // One prize tier worth 100% (10000 bp)
         let config = RaffleConfig {
             description: String::from_str(&env, "test raffle"),
-            end_time: 0,
-            no_deadline: true,
+            end_time: 2_000,
+            no_deadline: false,
             max_tickets: 2,
             max_tickets_per_tx: 2,
             min_tickets: 1,
@@ -1919,6 +1919,8 @@ mod test {
         client.init(&factory, &admin, &creator, &config);
         client.deposit_prize();
         client.buy_tickets(&buyer, &1);
+        env.ledger().set_timestamp(2_000);
+        env.ledger().set_timestamp(2_000);
         client.finalize_raffle();
 
         // Sanity: a winner is now recorded, and it is NOT the attacker.
@@ -1928,7 +1930,7 @@ mod test {
 
         // Advance past the claim lockup so we reach the winner check, not ClaimTooEarly.
         env.ledger()
-            .set_timestamp(1_000 + DEFAULT_CLAIM_LOCKUP_SECONDS + 1);
+            .set_timestamp(2_000 + DEFAULT_CLAIM_LOCKUP_SECONDS + 1);
 
         // Attacker authenticates fine (mock_all_auths) but is not the winner.
         let result = client.try_claim_prize(&attacker, &0u32);
