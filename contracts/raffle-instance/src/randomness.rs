@@ -245,21 +245,33 @@ impl WinnerSelectionStrategy for OracleSeedWinnerSelection {
         let n = total_tickets as u64;
         let largest_multiple = (u64::MAX / n) * n;
 
+        let effective_count = winner_count.min(total_tickets);
         let mut current_seed = self.seed;
-        for _ in 0..winner_count {
-            // Advance until the sample falls below the rejection threshold.
+        for _ in 0..effective_count {
             let idx = loop {
-                if current_seed < largest_multiple {
-                    break (current_seed % n) as u32;
+                let candidate = loop {
+                    if current_seed < largest_multiple {
+                        break (current_seed % n) as u32;
+                    }
+                    current_seed = current_seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                };
+                let mut found = false;
+                for i in 0..indices.len() {
+                    if indices.get(i).unwrap() == candidate {
+                        found = true;
+                        break;
+                    }
                 }
-                // Mix the seed to get a new candidate; wrapping_mul with a
-                // large odd constant provides a fast, bias-free step.
+                if !found {
+                    break candidate;
+                }
                 current_seed = current_seed
                     .wrapping_mul(6364136223846793005)
                     .wrapping_add(1442695040888963407);
             };
             indices.push_back(idx);
-            // Advance the seed for the next winner so picks are independent.
             current_seed = current_seed
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
