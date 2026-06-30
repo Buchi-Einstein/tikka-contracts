@@ -109,7 +109,9 @@ pub struct RaffleConfig {
     pub randomness_source: RandomnessSource,
     /// Optional oracle contract address for external randomness flows.
     pub oracle_address: Option<Address>,
-    /// Protocol fee in basis points (100 = 1%). Charged on ticket purchase only.
+    /// Protocol fee in basis points (100 = 1%).
+    /// Charged at two points: ticket purchase and prize claim.
+    /// See docs/FEE_MODEL.md for full fee model details.
     pub protocol_fee_bp: u32,
     /// Optional treasury recipient address for protocol fees.
     pub treasury_address: Option<Address>,
